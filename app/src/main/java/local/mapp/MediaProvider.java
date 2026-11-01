@@ -58,19 +58,24 @@ public final class MediaProvider extends ContentProvider {
                 @Override public int onRead(long offset,int size,byte[] data) throws ErrnoException {
                     if(offset>=length) return 0;
                     try {
-                        if(offset<cacheStart || offset>=cacheStart+cache.length) {
-                            HttpsURLConnection c=api.open(item.getString("path"));
-                            long end=Math.min(length-1,offset+1024*1024-1);
-                            c.setRequestProperty("Range","bytes="+offset+"-"+end);
-                            try {
-                                if(c.getResponseCode()!=206) throw new IOException("Range request failed");
-                                try(InputStream in=c.getInputStream()) { cache=Api.read(in,1024*1024); }
-                                if(cache.length!=end-offset+1) throw new IOException("Incomplete range");
-                                cacheStart=offset;
-                            } finally { c.disconnect(); }
+                        int wanted=(int)Math.min(size,length-offset), copied=0;
+                        while(copied<wanted) {
+                            long cursor=offset+copied;
+                            if(cursor<cacheStart || cursor>=cacheStart+cache.length) {
+                                HttpsURLConnection c=api.open(item.getString("path"));
+                                long end=Math.min(length-1,cursor+1024*1024-1);
+                                c.setRequestProperty("Range","bytes="+cursor+"-"+end);
+                                try {
+                                    if(c.getResponseCode()!=206) throw new IOException("Range request failed");
+                                    try(InputStream in=c.getInputStream()) { cache=Api.read(in,1024*1024); }
+                                    if(cache.length!=end-cursor+1) throw new IOException("Incomplete range");
+                                    cacheStart=cursor;
+                                } finally { c.disconnect(); }
+                            }
+                            int count=(int)Math.min(wanted-copied,cacheStart+cache.length-cursor);
+                            System.arraycopy(cache,(int)(cursor-cacheStart),data,copied,count); copied+=count;
                         }
-                        int count=(int)Math.min(size,cacheStart+cache.length-offset);
-                        System.arraycopy(cache,(int)(offset-cacheStart),data,0,count); return count;
+                        return copied;
                     } catch(Exception e) { throw new ErrnoException("MCore read",OsConstants.EIO,e); }
                 }
                 @Override public void onRelease() { thread.quitSafely(); }
