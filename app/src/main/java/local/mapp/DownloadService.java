@@ -34,7 +34,7 @@ public final class DownloadService extends Service {
             JSONObject item=new JSONObject(intent.getStringExtra("item"));
             if(queued.add(item.getString("id"))) worker.submit(()->{
                 try { download(item); }
-                finally { queued.remove(item.optString("id")); if(queued.isEmpty()) stopSelf(); }
+                finally { queued.remove(item.optString("id")); if(queued.isEmpty()) stopSelfResult(startId); }
             });
         } catch(Exception e) { stopSelf(); }
         return START_NOT_STICKY;
@@ -64,6 +64,7 @@ public final class DownloadService extends Service {
                         channel.force(false);
                         done=end+1;
                         item.put("downloaded",done).put("download_rate",(done-chunkStart)*1000/Math.max(1,System.currentTimeMillis()-chunkStarted)); Library.put(this,item);
+                        FolderLibrary.backup(this,item);
                         getSystemService(NotificationManager.class).notify(1,notification(item.getString("title"),(int)(done*100/total)));
                     }
                 }
@@ -78,12 +79,9 @@ public final class DownloadService extends Service {
         }
         if(cancelled.remove(item.optString("id"))) {
             try {
-                Uri uri=Uri.parse(item.getString("uri"));
-                if(android.provider.DocumentsContract.isDocumentUri(this,uri)) android.provider.DocumentsContract.deleteDocument(getContentResolver(),uri);
-                else getContentResolver().delete(uri,null,null);
-                Library.remove(this,item.getString("id"));
+                FolderLibrary.remove(this,item);
             } catch(Exception e) { try { item.put("state","paused").put("error","Не удалось удалить файл: "+e.getMessage()); Library.put(this,item); } catch(Exception ignored) { } }
-        } else Library.put(this,item);
+        } else { Library.put(this,item); FolderLibrary.backup(this,item); }
     }
     @Override public void onTimeout(int startId,int fgsType) { stopped=true; stopSelf(); }
     @Override public void onDestroy() { stopped=true; worker.shutdownNow(); queued.clear(); super.onDestroy(); }

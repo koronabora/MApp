@@ -20,4 +20,20 @@ final class Library {
         for(int i=0;i<old.length();i++) if(!old.optJSONObject(i).optString("id").equals(id)) result.put(old.optJSONObject(i));
         c.getSharedPreferences("library",0).edit().putString("items",result.toString()).commit();
     }
+    static synchronized void position(Context c,String uri,long position) {
+        JSONArray items=all(c);
+        for(int i=0;i<items.length();i++) {
+            JSONObject item=items.optJSONObject(i);
+            if(uri.equals(item.optString("uri"))) try { item.put("position",position); put(c,item); } catch(Exception ignored) { }
+        }
+    }
+    static JSONArray grouped(Context c) {
+        java.util.LinkedHashMap<String,JSONObject> groups=new java.util.LinkedHashMap<>(); JSONArray items=all(c);
+        for(int i=0;i<items.length();i++) {
+            JSONObject item=items.optJSONObject(i); String group=item.optString("server")+"|"+item.optString("movie",item.optString("title"));
+            JSONObject prior=groups.get(group);
+            if(prior==null || (!item.optString("state").equals("complete") && prior.optString("state").equals("complete"))) groups.put(group,item);
+        }
+        JSONArray result=new JSONArray(); for(JSONObject item:groups.values()) result.put(item); return result;
+    }
 }
