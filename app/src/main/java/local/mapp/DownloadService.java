@@ -10,7 +10,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Set;
 import java.util.concurrent.*;
-import javax.net.ssl.HttpsURLConnection;
 import org.json.JSONObject;
 
 public final class DownloadService extends Service {
@@ -54,25 +53,19 @@ public final class DownloadService extends Service {
                     if(cancelled.contains(item.getString("id"))) throw new InterruptedIOException("Отменено пользователем");
                     long chunkStarted=System.currentTimeMillis(), chunkStart=done;
                     long end=Math.min(total-1,done+4*1024*1024-1);
-                    HttpsURLConnection connection=api.open(item.getString("path"));
-                    connection.setRequestProperty("Range","bytes="+done+"-"+end);
-                    try {
-                        if(connection.getResponseCode()!=206) throw new IOException("Сервер не вернул запрошенный фрагмент");
-                        try(InputStream input=connection.getInputStream()) {
-                            byte[] buffer=new byte[128*1024]; int read;
-                            while((read=input.read(buffer))!=-1) {
-                                if(stopped || cancelled.contains(item.getString("id"))) throw new InterruptedIOException();
-                                if(done+read>end+1) throw new IOException("Некорректный размер фрагмента");
-                                ByteBuffer bytes=ByteBuffer.wrap(buffer,0,read);
-                                while(bytes.hasRemaining()) channel.write(bytes);
-                                done+=read;
-                            }
-                        }
-                        if(done!=end+1) throw new IOException("Загрузка прервана; можно продолжить");
+                    byte[] verified=VerifiedChunk.retry(()->{
+                        if(stopped || cancelled.contains(item.getString("id"))) throw new InterruptedIOException();
+                        return VerifiedChunk.read(api,item.getString("path"),chunkStart,end,total);
+                    });
+                    if(stopped || cancelled.contains(item.getString("id"))) throw new InterruptedIOException();
+                    {
+                        ByteBuffer bytes=ByteBuffer.wrap(verified);
+                        while(bytes.hasRemaining()) channel.write(bytes);
                         channel.force(false);
+                        done=end+1;
                         item.put("downloaded",done).put("download_rate",(done-chunkStart)*1000/Math.max(1,System.currentTimeMillis()-chunkStarted)); Library.put(this,item);
                         getSystemService(NotificationManager.class).notify(1,notification(item.getString("title"),(int)(done*100/total)));
-                    } finally { connection.disconnect(); }
+                    }
                 }
             }
             item.put("state",done==total?"complete":"paused");
