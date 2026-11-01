@@ -33,6 +33,51 @@ public final class StreamInstrumentation extends Instrumentation {
         if(!denied || attempts[0]!=3) throw new AssertionError("Retry limit failed");
     }
     private Bundle arguments;
+    private void checkEpisodes(Api api) throws Exception {
+        var context=getTargetContext();
+        String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:3")).getString("id");
+        var files=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files");
+        JSONObject card=null; var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies");
+        for(int i=0;i<movies.length();i++) if(movies.optJSONObject(i).optString("title").equals("MCore series demo")) card=movies.optJSONObject(i);
+        if(card==null || files.length()!=2) throw new AssertionError("Install synthetic series fixture first");
+        String mid=card.getString("id");
+        for(int i=0;i<files.length();i++) { var file=files.getJSONObject(i); api.request("PUT","/v1/history/"+mid,new JSONObject().put("position",i==0?3000:8000).put("torrent",key).put("file",file.getInt("index")).put("episode",file.getString("episode"))); }
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        var chosen=MainActivity.class.getDeclaredField("chosenFile"); chosen.setAccessible(true);
+        try {
+            runOnMainSync(()->{ try { var method=MainActivity.class.getDeclaredMethod("movie",String.class); method.setAccessible(true); method.invoke(activity,mid); } catch(Exception e) { throw new RuntimeException(e); } });
+            long deadline=System.currentTimeMillis()+30000;
+            while(chosen.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
+            if(chosen.get(activity)==null) throw new AssertionError("Episode selector did not load");
+            JSONObject selected=(JSONObject)chosen.get(activity);
+            if(selected.optLong("position")!=8000) throw new AssertionError("Last episode was not preselected");
+            runOnMainSync(()->{
+                var selector=(android.widget.Spinner)find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Spinner && "episode-selector".equals(v.getTag()));
+                if(selector==null) throw new AssertionError("Episode list absent"); selector.setSelection(0);
+            });
+            waitForIdleSync();
+            selected=(JSONObject)chosen.get(activity);
+            if(selected.optLong("position")!=3000) throw new AssertionError("Episode positions mixed");
+            var monitor=addMonitor(PlayerActivity.class.getName(),null,false);
+            runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Продолжить просмотр")); if(watch==null) throw new AssertionError("Resume button absent"); watch.performClick(); });
+            var playerActivity=(PlayerActivity)waitForMonitorWithTimeout(monitor,30000); removeMonitor(monitor);
+            if(playerActivity==null) throw new AssertionError("Selected episode did not launch");
+            try {
+                var field=PlayerActivity.class.getDeclaredField("player"); field.setAccessible(true); var player=(org.videolan.libvlc.MediaPlayer)field.get(playerActivity);
+                deadline=System.currentTimeMillis()+20000;
+                while(player.getTime()<5000 && System.currentTimeMillis()<deadline) Thread.sleep(100);
+                if(player.getTime()<5000 || player.getSpuTracksCount()<1) throw new AssertionError("Episode playback or embedded subtitles unavailable");
+            } finally { runOnMainSync(playerActivity::finish); }
+            deadline=System.currentTimeMillis()+15000;
+            boolean saved=false;
+            while(System.currentTimeMillis()<deadline) {
+                var episodes=api.request("GET","/v1/movies/"+mid,null).getJSONArray("episodes");
+                if(episodes.getJSONObject(0).optLong("position")>=5000 && episodes.getJSONObject(1).optLong("position")==8000) { saved=true; break; }
+                Thread.sleep(200);
+            }
+            if(!saved) throw new AssertionError("Independent episode checkpoint did not persist");
+        } finally { runOnMainSync(activity::finish); }
+    }
     private android.view.View find(android.view.View root,java.util.function.Predicate<android.view.View> match) {
         if(match.test(root)) return root;
         if(root instanceof android.view.ViewGroup group) for(int i=0;i<group.getChildCount();i++) { var result=find(group.getChildAt(i),match); if(result!=null) return result; }
@@ -156,9 +201,9 @@ public final class StreamInstrumentation extends Instrumentation {
     private void checkPlayer(Api api,String release) throws Exception {
         var context=getTargetContext();
         String key=api.request("POST","/v1/torrents",new JSONObject().put("release",release)).getString("id");
-        JSONObject state=api.request("GET","/v1/torrents/"+key,null);
+        JSONObject state=api.request("GET","/v1/torrents/"+key+"?buffer=5",null);
         long deadline=System.currentTimeMillis()+60000;
-        while(!state.optBoolean("ready") && System.currentTimeMillis()<deadline) { Thread.sleep(500); state=api.request("GET","/v1/torrents/"+key,null); }
+        while(!state.optBoolean("ready") && System.currentTimeMillis()<deadline) { Thread.sleep(500); state=api.request("GET","/v1/torrents/"+key+"?buffer=5",null); }
         if(!state.optBoolean("ready")) throw new AssertionError("Fixture buffer not ready");
         if(release.equals("local:2") && state.optDouble("progress")>=1) throw new AssertionError("Fixture must be incomplete");
         JSONObject file=state.getJSONArray("files").getJSONObject(0);
@@ -205,6 +250,10 @@ public final class StreamInstrumentation extends Instrumentation {
             var context=getTargetContext();
             Api api=new Api(context);
             integrityChecks();
+            if(arguments!=null && arguments.containsKey("episodes")) {
+                checkEpisodes(api); result.putString("stream","PASS: episode selector, independent resume positions, MKV playback/subtitles and persisted history");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("card")) {
                 checkCard(api); result.putString("stream","PASS: active download preselected, centered hint, saved action follows file availability");
                 finish(Activity.RESULT_OK,result); return;
