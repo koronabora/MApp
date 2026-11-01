@@ -45,7 +45,8 @@ public final class DownloadService extends Service {
             if(!api.server.equals(item.getString("server"))) throw new IOException("Подключитесь к исходному серверу");
             Uri target=Uri.parse(item.getString("uri"));
             long total=item.getLong("size"), done=item.optLong("downloaded");
-            item.put("state","downloading"); Library.put(this,item);
+            if(cancelled.contains(item.getString("id"))) throw new InterruptedIOException("Отменено пользователем");
+            item.put("state","downloading"); Library.downloadState(this,item);
             Diagnostics.init(this); Diagnostics.event("download","started bytes="+item.optLong("downloaded")+" total="+item.optLong("size"));
             try(ParcelFileDescriptor fd=getContentResolver().openFileDescriptor(target,"rw");
                 FileOutputStream output=new FileOutputStream(fd.getFileDescriptor()); FileChannel channel=output.getChannel()) {
@@ -64,7 +65,7 @@ public final class DownloadService extends Service {
                         while(bytes.hasRemaining()) channel.write(bytes);
                         channel.force(false);
                         done=end+1;
-                        item.put("downloaded",done).put("download_rate",(done-chunkStart)*1000/Math.max(1,System.currentTimeMillis()-chunkStarted)); Library.put(this,item);
+                        item.put("downloaded",done).put("download_rate",(done-chunkStart)*1000/Math.max(1,System.currentTimeMillis()-chunkStarted)); Library.downloadState(this,item);
                         FolderLibrary.backup(this,item);
                         getSystemService(NotificationManager.class).notify(1,notification(item.getString("title"),(int)(done*100/total)));
                     }
@@ -84,7 +85,7 @@ public final class DownloadService extends Service {
             try {
                 FolderLibrary.remove(this,item);
             } catch(Exception e) { try { item.put("state","paused").put("error","Не удалось удалить файл: "+e.getMessage()); Library.put(this,item); } catch(Exception ignored) { } }
-        } else { Library.put(this,item); FolderLibrary.backup(this,item); }
+        } else { Library.downloadState(this,item); FolderLibrary.backup(this,item); }
     }
     @Override public void onTimeout(int startId,int fgsType) { stopped=true; stopSelf(); }
     @Override public void onDestroy() { stopped=true; worker.shutdownNow(); queued.clear(); super.onDestroy(); }

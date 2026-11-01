@@ -20,6 +20,13 @@ final class Library {
         for(int i=0;i<old.length();i++) if(!old.optJSONObject(i).optString("id").equals(id)) result.put(old.optJSONObject(i));
         c.getSharedPreferences("library",0).edit().putString("items",result.toString()).commit();
     }
+    static synchronized void downloadState(Context c,JSONObject item) {
+        JSONArray current=all(c);
+        for(int i=0;i<current.length();i++) { JSONObject prior=current.optJSONObject(i); if(prior.optString("id").equals(item.optString("id")))
+            for(String field:new String[]{"position","duration","completed"}) if(prior.has(field)) try { item.put(field,prior.get(field)); } catch(Exception ignored) { }
+        }
+        put(c,item);
+    }
     static synchronized void position(Context c,String uri,long position) {
         progress(c,uri,position,0,false);
     }

@@ -33,18 +33,45 @@ public final class PlayerActivity extends Activity {
     private AlertDialog audioDialog;
     private long audioDeadline;
     private String audioKey;
+    private LinearLayout overlay, top, bottom;
+    private boolean locked;
+    private final Runnable hideControls=()->{ if(overlay!=null && player!=null && player.isPlaying() && !seeking) overlay.setVisibility(View.GONE); };
+    private int dp(int n) { return (int)(n*getResources().getDisplayMetrics().density); }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         Diagnostics.init(this); Diagnostics.event("player","created position="+getIntent().getLongExtra("position",0));
-        LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.BLACK);
+        FrameLayout root=new FrameLayout(this); root.setBackgroundColor(Color.BLACK);
         root.setOnApplyWindowInsetsListener((v,insets)->{ v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom()); return insets; });
-        VLCVideoLayout video=new VLCVideoLayout(this); root.addView(video,new LinearLayout.LayoutParams(-1,0,1));
-        status=new TextView(this); status.setTextColor(Color.WHITE); status.setGravity(Gravity.CENTER); status.setText("Подготовка видео…"); root.addView(status);
-        seek=new SeekBar(this); seek.setMax(10000); root.addView(seek);
-        HorizontalScrollView scroller=new HorizontalScrollView(this); LinearLayout controls=new LinearLayout(this); scroller.addView(controls); root.addView(scroller);
-        controls.addView(control("Назад",this::finish)); controls.addView(control("−10 с",()->jump(-10000)));
-        pause=control("Пауза",()->{ if(player.isPlaying()) player.pause(); else player.play(); }); controls.addView(pause);
-        controls.addView(control("+10 с",()->jump(10000))); controls.addView(control("Аудио",()->tracks(false))); controls.addView(control("Субтитры",()->tracks(true)));
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        VLCVideoLayout video=new VLCVideoLayout(this); root.addView(video,new FrameLayout.LayoutParams(-1,-1));
+        View touch=new View(this); root.addView(touch,new FrameLayout.LayoutParams(-1,-1));
+        overlay=new LinearLayout(this); overlay.setOrientation(LinearLayout.VERTICAL); root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
+        overlay.setBackgroundColor(0x22000000);
+        top=new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL); top.setBackgroundColor(0x77000000); overlay.addView(top);
+        top.addView(icon("‹","Назад",this::finish));
+        TextView title=new TextView(this); title.setText("MApp"); title.setTextColor(Color.WHITE); title.setTextSize(18); top.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        top.addView(icon("⛶","Повернуть экран",()->setRequestedOrientation(getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)));
+        Button lock=icon("▣","Блокировка управления",()->{}); top.addView(lock);
+        lock.setOnClickListener(v->{ locked=!locked; bottom.setVisibility(locked?View.GONE:View.VISIBLE); lock.setText(locked?"◈":"▣"); Toast.makeText(this,locked?"Управление заблокировано":"Управление разблокировано",Toast.LENGTH_SHORT).show(); });
+        View space=new View(this); overlay.addView(space,new LinearLayout.LayoutParams(-1,0,1)); space.setOnClickListener(v->overlay.setVisibility(View.GONE));
+        bottom=new LinearLayout(this); bottom.setOrientation(LinearLayout.VERTICAL); bottom.setPadding(dp(12),dp(8),dp(12),dp(12)); bottom.setBackgroundColor(0x77000000); overlay.addView(bottom);
+        status=new TextView(this); status.setTextColor(Color.WHITE); status.setGravity(Gravity.CENTER); status.setText("Подготовка видео…"); bottom.addView(status);
+        seek=new SeekBar(this); seek.setMax(10000); seek.setProgressTintList(android.content.res.ColorStateList.valueOf(0xffff8a24)); seek.setThumbTintList(android.content.res.ColorStateList.valueOf(0xffff8a24)); bottom.addView(seek);
+        LinearLayout controls=new LinearLayout(this); controls.setGravity(Gravity.CENTER); bottom.addView(controls);
+        controls.addView(icon("↶","Назад 10 секунд",()->jump(-10000)));
+        pause=icon("Ⅱ","Пауза / продолжить",()->{ if(player.isPlaying()) player.pause(); else player.play(); showControls(); }); controls.addView(pause);
+        controls.addView(icon("↷","Вперёд 10 секунд",()->jump(10000)));
+        controls.addView(icon("♫","Аудиодорожки",()->tracks(false))); controls.addView(icon("CC","Субтитры",()->tracks(true)));
+        controls.addView(icon("⋮","Дополнительно",this::more));
+        final float[] down=new float[2];
+        touch.setOnTouchListener((v,event)->{ if(event.getAction()==android.view.MotionEvent.ACTION_DOWN) { down[0]=event.getX(); down[1]=event.getY(); return true; }
+            if(event.getAction()==android.view.MotionEvent.ACTION_UP) {
+                float delta=down[1]-event.getY();
+                if(!locked && Math.abs(delta)>dp(40)) {
+                    if(down[0]<root.getWidth()/2f) { var attrs=getWindow().getAttributes(); attrs.screenBrightness=Math.max(.05f,Math.min(1f,(attrs.screenBrightness<0?.5f:attrs.screenBrightness)+delta/root.getHeight())); getWindow().setAttributes(attrs); }
+                    else { var audio=getSystemService(android.media.AudioManager.class); int max=audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC); int current=audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC); audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC,Math.max(0,Math.min(max,current+Math.round(delta/root.getHeight()*max))),android.media.AudioManager.FLAG_SHOW_UI); }
+                } else showControls(); return true;
+            } return true; });
         setContentView(root);
         movie=getIntent().getStringExtra("movie"); savedUri=getIntent().getStringExtra("saved_uri");
         resume=state!=null?state.getLong("position"):getIntent().getLongExtra("position",0);
@@ -54,16 +81,18 @@ public final class PlayerActivity extends Activity {
         try {
             // VLC's default 16 MiB prefetch read can wait across an unavailable torrent gap.
             // Keep reads small so a seek can reach a different available range promptly.
-            engine=new LibVLC(this,new ArrayList<>(Arrays.asList("--no-video-title-show","--file-caching=1500","--network-caching=1500","--prefetch-buffer-size=1024","--prefetch-read-size=65536")));
+            int cache=getSharedPreferences("settings",0).getInt("buffer",15)*1000;
+            engine=new LibVLC(this,new ArrayList<>(Arrays.asList("--no-video-title-show","--file-caching=1500","--network-caching="+cache,"--prefetch-buffer-size=1024","--prefetch-read-size=65536")));
             player=new MediaPlayer(engine); player.attachViews(video,null,true,false);
             if(askAudio) player.setVolume(0);
             player.setEventListener(event->{
                 if(event.type!=org.videolan.libvlc.MediaPlayer.Event.TimeChanged && event.type!=org.videolan.libvlc.MediaPlayer.Event.PositionChanged)
                     Diagnostics.event("player-event","type="+event.type);
                 if(event.type==MediaPlayer.Event.Playing) {
-                    pause.setText("Пауза");
+                    pause.setText("Ⅱ"); showControls();
                     if(!started) { started=true; if(resume>0) player.setTime(resume); }
-                } else if(event.type==MediaPlayer.Event.Paused) pause.setText("Продолжить");
+                    if(audioDialog!=null && audioDialog.isShowing() && player.isPlaying()) player.pause();
+                } else if(event.type==MediaPlayer.Event.Paused) { pause.setText("▶"); showControls(); }
                 else if(event.type==MediaPlayer.Event.Buffering) { buffering=event.getBuffering(); status.setText("Буферизация: "+(int)buffering+" %"); }
                 else if(event.type==MediaPlayer.Event.EncounteredError) new AlertDialog.Builder(this).setMessage("Не удалось прочитать видео. Проверьте соединение или выберите другую раздачу.").setPositiveButton("Закрыть",(d,n)->finish()).show();
                 else if(event.type==MediaPlayer.Event.EndReached) { completed=true; finish(); }
@@ -71,7 +100,8 @@ public final class PlayerActivity extends Activity {
             Media media;
             Uri uri=getIntent().getData();
             if("local.mapp.media".equals(uri.getAuthority())) {
-                bridge=new PlaybackBridge(this,MediaProvider.describe(this,uri).getString("path"));
+                JSONObject source=MediaProvider.describe(this,uri);
+                bridge=new PlaybackBridge(this,source.getString("path"),source.getLong("size"));
                 media=new Media(engine,Uri.parse(bridge.url()));
             } else {
                 descriptor=getContentResolver().openFileDescriptor(uri,"r");
@@ -91,7 +121,15 @@ public final class PlayerActivity extends Activity {
         } catch(Exception e) { new AlertDialog.Builder(this).setMessage(e.getMessage()).setPositiveButton("Закрыть",(d,n)->finish()).show(); }
     }
     private Button control(String label,Runnable action) {
-        Button button=new Button(this); button.setText(label); button.setAllCaps(false); button.setOnClickListener(v->action.run()); return button;
+        Button button=new Button(this); button.setText(label); button.setAllCaps(false); button.setTextColor(Color.WHITE); button.setBackgroundColor(Color.TRANSPARENT); button.setOnClickListener(v->action.run()); return button;
+    }
+    private Button icon(String symbol,String description,Runnable action) { Button b=control(symbol,action); b.setContentDescription(description); b.setTextSize(22); b.setMinWidth(0); b.setMinimumWidth(0); b.setPadding(0,0,0,0); b.setLayoutParams(new LinearLayout.LayoutParams(dp(48),dp(48))); return b; }
+    private void showControls() { overlay.setVisibility(View.VISIBLE); ui.removeCallbacks(hideControls); ui.postDelayed(hideControls,4000); }
+    private void more() {
+        new AlertDialog.Builder(this).setItems(new String[]{"Скорость воспроизведения","Масштаб видео"},(d,n)->{
+            if(n==0) { String[] labels={"0.5×","0.75×","1×","1.25×","1.5×","2×"}; float[] rates={.5f,.75f,1,1.25f,1.5f,2}; new AlertDialog.Builder(this).setTitle("Скорость").setItems(labels,(dialog,i)->player.setRate(rates[i])).show(); }
+            else new AlertDialog.Builder(this).setTitle("Масштаб видео").setItems(new String[]{"Вписать","Заполнить","16:9","4:3"},(dialog,i)->{ player.setAspectRatio(i==2?"16:9":i==3?"4:3":null); player.setScale(i==1?1.5f:0); }).show();
+        }).show();
     }
     private void jump(long amount) { if(player!=null) player.setTime(Math.max(0,Math.min(player.getLength(),player.getTime()+amount))); }
     private void tracks(boolean subtitles) {
@@ -114,7 +152,7 @@ public final class PlayerActivity extends Activity {
         int remembered=movie==null && savedUri==null?Integer.MIN_VALUE:getSharedPreferences("playback",0).getInt(audioKey,Integer.MIN_VALUE);
         for(var track:audio) if(track.id==remembered && player.getAudioTrack()!=remembered) player.setAudioTrack(remembered);
         if(!askAudio || audio.size()<2) { player.setVolume(100); return; }
-        player.pause();
+        if(player.isPlaying()) player.pause();
         String[] names=new String[audio.size()]; int selected=0;
         for(int i=0;i<names.length;i++) { names[i]=audio.get(i).name; if(audio.get(i).id==player.getAudioTrack()) selected=i; }
         audioDialog=new AlertDialog.Builder(this).setTitle("Выберите аудиодорожку")
@@ -144,6 +182,7 @@ public final class PlayerActivity extends Activity {
         long position=completed?0:Math.max(0,player.getTime());
         long duration=Math.max(0,player.getLength());
         setResult(RESULT_OK,new Intent().putExtra("extra_position",position));
+        WatchState.save(this,movie==null?"":movie,getIntent().getStringExtra("episode")==null?"":getIntent().getStringExtra("episode"),getIntent().getStringExtra("torrent")==null?"":getIntent().getStringExtra("torrent"),getIntent().getIntExtra("file",0),position);
         if(savedUri!=null) Library.progress(this,savedUri,position,duration,completed);
         if(movie!=null && !movie.isEmpty() && !movie.startsWith("local-file:") && (finalUpdate || saving.compareAndSet(false,true))) io.submit(()->{ try {
             JSONObject update=new JSONObject().put("position",position).put("duration",duration).put("completed",completed);
