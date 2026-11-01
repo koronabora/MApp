@@ -33,6 +33,133 @@ public final class StreamInstrumentation extends Instrumentation {
         if(!denied || attempts[0]!=3) throw new AssertionError("Retry limit failed");
     }
     private Bundle arguments;
+    private void checkSeasons033(Api api) throws Exception {
+        var context=getTargetContext(); context.getSharedPreferences("settings",0).edit().putBoolean("ask_path",false).commit();
+        String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:4")).getString("id");
+        if(api.request("GET","/v1/torrents/"+key,null).getJSONArray("files").length()!=3) throw new AssertionError("Install multi-season fixture");
+        var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies"); String mid="";
+        for(int i=0;i<movies.length();i++) if(movies.optJSONObject(i).optString("title").equals("MCore multiseason demo")) mid=movies.getJSONObject(i).getString("id");
+        final String movie=mid; if(movie.isEmpty()) throw new AssertionError("Multi-season movie missing");
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        var chosen=MainActivity.class.getDeclaredField("chosenFile"); chosen.setAccessible(true);
+        try {
+            runOnMainSync(()->{ try { var m=MainActivity.class.getDeclaredMethod("movie",String.class); m.setAccessible(true); m.invoke(activity,movie); } catch(Exception e) { throw new RuntimeException(e); } });
+            long deadline=System.currentTimeMillis()+30000; while(chosen.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
+            if(chosen.get(activity)==null) throw new AssertionError("Multi-season list not loaded");
+            runOnMainSync(()->{ var season=(android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"file-season-selector".equals(v.getTag())); if(season.getCount()!=2) throw new AssertionError("Season pack was not split"); season.setSelection(1); }); waitForIdleSync();
+            if(((JSONObject)chosen.get(activity)).optInt("season")!=2) throw new AssertionError("Season selection ignored");
+            runOnMainSync(()->{ var root=activity.getWindow().getDecorView(); var episodes=(android.widget.Spinner)find(root,v->"episode-selector".equals(v.getTag())); if(episodes.getCount()!=2) throw new AssertionError("Episode list mixes seasons");
+                find(root,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Скачать сезон")).performClick(); });
+            deadline=System.currentTimeMillis()+60000; int completed=0;
+            while(System.currentTimeMillis()<deadline) { completed=0; var all=Library.all(context); for(int i=0;i<all.length();i++) { var row=all.optJSONObject(i); if(row.optString("movie").equals(movie)) { if(row.optInt("season")!=2) throw new AssertionError("Downloaded unwanted season"); if(row.optString("state").equals("complete")) completed++; } } if(completed==2) break; Thread.sleep(200); }
+            if(completed!=2) throw new AssertionError("Season batch incomplete");
+            JSONObject card=api.request("GET","/v1/movies/"+movie,null);
+            runOnMainSync(()->{ try { var m=MainActivity.class.getDeclaredMethod("saveAllSeasons",JSONObject.class); m.setAccessible(true); m.invoke(activity,card); } catch(Exception e) { throw new RuntimeException(e); } });
+            deadline=System.currentTimeMillis()+60000;
+            while(System.currentTimeMillis()<deadline) { completed=0; var all=Library.all(context); for(int i=0;i<all.length();i++) if(all.optJSONObject(i).optString("movie").equals(movie) && all.optJSONObject(i).optString("state").equals("complete")) completed++; if(completed==3) break; Thread.sleep(200); }
+            if(completed!=3) throw new AssertionError("All seasons missing or duplicated episodes: "+completed);
+        } finally { runOnMainSync(activity::finish); var all=Library.all(context); for(int i=0;i<all.length();i++) if(all.optJSONObject(i).optString("movie").equals(movie)) FolderLibrary.remove(context,all.getJSONObject(i)); }
+    }
+    private void checkExternal033(Api api) throws Exception {
+        var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0); boolean external=prefs.getBoolean("external_player",false); int buffer=prefs.getInt("buffer",15);
+        prefs.edit().putBoolean("external_player",true).putInt("buffer",5).commit();
+        String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:2")).getString("id");
+        JSONObject file=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files").getJSONObject(0);
+        String mid=""; var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies");
+        for(int i=0;i<movies.length();i++) if(movies.optJSONObject(i).optString("title").equals("MCore incomplete AVI")) mid=movies.getJSONObject(i).getString("id");
+        if(mid.isEmpty()) throw new AssertionError("AVI fixture absent"); final String movie=mid;
+        JSONObject card=api.request("GET","/v1/movies/"+movie,null);
+        var uri=MediaProvider.create(context,"/v1/torrents/"+key+"/files/"+file.getInt("index"),file.getLong("size"),file.getString("name"));
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            runOnMainSync(()->{ try {
+                var page=MainActivity.class.getDeclaredMethod("page",String.class,String.class); page.setAccessible(true); page.invoke(activity,"movie","Карточка фильма");
+                var current=MainActivity.class.getDeclaredField("currentMovie"); current.setAccessible(true); current.set(activity,card);
+                var torrent=MainActivity.class.getDeclaredField("selectedTorrent"); torrent.setAccessible(true); torrent.set(activity,key);
+                var play=MainActivity.class.getDeclaredMethod("play",android.net.Uri.class,String.class,long.class); play.setAccessible(true); play.invoke(activity,uri,movie,5000L);
+            } catch(Exception e) { throw new RuntimeException(e); } });
+            long deadline=System.currentTimeMillis()+60000; boolean launched=false;
+            while(System.currentTimeMillis()<deadline) { var root=getUiAutomation().getRootInActiveWindow(); if(root!=null && "org.videolan.vlc".contentEquals(root.getPackageName())) { launched=true; break; }
+                if(root!=null) for(var node:root.findAccessibilityNodeInfosByText("VLC")) { if(!node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) && node.getParent()!=null) node.getParent().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK); }
+                Thread.sleep(200); }
+            if(!launched) throw new AssertionError("External VLC did not launch");
+            Thread.sleep(12000);
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"external033.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+            getUiAutomation().performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK);
+            deadline=System.currentTimeMillis()+15000;
+            while(System.currentTimeMillis()<deadline && WatchState.position(context,movie,"",key,0,-1)<=5000) Thread.sleep(200);
+            long position=WatchState.position(context,movie,"",key,0,-1);
+            if(position<=5000) throw new AssertionError("VLC did not return progress: "+position);
+            var screen=MainActivity.class.getDeclaredField("screen"); screen.setAccessible(true);
+            if(!"movie".equals(screen.get(activity))) throw new AssertionError("External return lost movie card");
+        } finally { prefs.edit().putBoolean("external_player",external).putInt("buffer",buffer).commit(); context.stopService(new android.content.Intent(context,PlaybackService.class)); runOnMainSync(activity::finish); }
+    }
+    private void check033(Api api) throws Exception {
+        var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0);
+        prefs.edit().putBoolean("ask_path",false).putBoolean("external_player",false).commit();
+        context.getSharedPreferences("watch-state",0).edit().clear().commit();
+        String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:3")).getString("id");
+        var files=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files");
+        var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies"); String mid="";
+        for(int i=0;i<movies.length();i++) if(movies.optJSONObject(i).optString("title").equals("MCore series demo")) mid=movies.getJSONObject(i).getString("id");
+        final String movie=mid;
+        if(movie.isEmpty() || files.length()!=2) throw new AssertionError("Series fixture missing");
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        var chosen=MainActivity.class.getDeclaredField("chosenFile"); chosen.setAccessible(true);
+        try {
+            runOnMainSync(()->{ try { var m=MainActivity.class.getDeclaredMethod("movie",String.class); m.setAccessible(true); m.invoke(activity,movie); } catch(Exception e) { throw new RuntimeException(e); } });
+            long deadline=System.currentTimeMillis()+30000; while(chosen.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
+            if(chosen.get(activity)==null) throw new AssertionError("Series not loaded");
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"series033.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+            runOnMainSync(()->{
+                var root=activity.getWindow().getDecorView();
+                if(find(root,v->"file-season-selector".equals(v.getTag()))==null || find(root,v->"episode-selector".equals(v.getTag()))==null) throw new AssertionError("Two-level season/episode selector missing");
+                var download=find(root,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Скачать сезон"));
+                if(download==null) throw new AssertionError("Season download missing"); download.performClick();
+            });
+            deadline=System.currentTimeMillis()+60000; int count=0;
+            while(System.currentTimeMillis()<deadline) { count=0; var all=Library.all(context); for(int i=0;i<all.length();i++) if(all.optJSONObject(i).optString("movie").equals(movie) && all.optJSONObject(i).optString("state").equals("complete")) count++; if(count==2) break; Thread.sleep(200); }
+            if(count!=2) throw new AssertionError("Season queue did not download both episodes");
+            runOnMainSync(()->{ try { var m=MainActivity.class.getDeclaredMethod("library"); m.setAccessible(true); m.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } }); waitForIdleSync();
+            runOnMainSync(()->{
+                var root=activity.getWindow().getDecorView();
+                if(find(root,v->v instanceof android.widget.TextView && ((android.widget.TextView)v).getText().toString().equals("Сезон 1 · Серия 1"))==null || find(root,v->v instanceof android.widget.TextView && ((android.widget.TextView)v).getText().toString().equals("Сезон 1 · Серия 2"))==null) throw new AssertionError("Individual episode labels missing");
+                var delete=find(root,v->"Удалить файл".contentEquals(v.getContentDescription()==null?"":v.getContentDescription()));
+                if(delete==null || delete.getWidth()!=Math.round(48*context.getResources().getDisplayMetrics().density) || delete.getRight()>((android.view.View)delete.getParent()).getWidth()) throw new AssertionError("Delete button overflow");
+            });
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"downloads033.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+            JSONObject saved=null; var all=Library.all(context); for(int i=0;i<all.length();i++) if(all.optJSONObject(i).optString("movie").equals(movie)) { saved=all.getJSONObject(i); break; }
+            if(saved==null) throw new AssertionError("Saved episode absent");
+            // A fake remote path ensures the bridge must read the verified local prefix.
+            JSONObject original=new JSONObject(saved.toString()); String fake="/v1/torrents/local-prefix-only/files/0";
+            saved.put("path",fake); Library.put(context,saved);
+            try(var bridge=new PlaybackBridge(context,fake,saved.getLong("size"))) {
+                var connection=(java.net.HttpURLConnection)new java.net.URL(bridge.url()).openConnection(); connection.setRequestProperty("Range","bytes=17-8192");
+                byte[] actual; try(var in=connection.getInputStream()) { actual=Api.read(in,8192); } finally { connection.disconnect(); }
+                byte[] expected=new byte[8176];
+                try(var fd=context.getContentResolver().openFileDescriptor(android.net.Uri.parse(saved.getString("uri")),"r"); var in=new java.io.FileInputStream(fd.getFileDescriptor())) { in.getChannel().position(17); new java.io.DataInputStream(in).readFully(expected); }
+                if(!java.util.Arrays.equals(actual,expected)) throw new AssertionError("Local playback prefix mismatch");
+            } finally { Library.put(context,original); }
+            // Download progress updates must not overwrite a concurrent playback checkpoint.
+            Library.progress(context,original.getString("uri"),4321,20000,false);
+            Library.downloadState(context,original);
+            for(int i=0;i<Library.all(context).length();i++) { var row=Library.all(context).getJSONObject(i); if(row.optString("id").equals(original.optString("id")) && row.optLong("position")!=4321) throw new AssertionError("Download overwrote playback checkpoint"); }
+            runOnMainSync(()->{ try { chosen.set(activity,null); var m=MainActivity.class.getDeclaredMethod("movie",String.class); m.setAccessible(true); m.invoke(activity,movie); } catch(Exception e) { throw new RuntimeException(e); } });
+            deadline=System.currentTimeMillis()+30000; while(chosen.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
+            Thread.sleep(1700); waitForIdleSync();
+            var monitor=addMonitor(PlayerActivity.class.getName(),null,false);
+            runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Смотреть сохранённое")); if(watch==null) throw new AssertionError("Saved episode action missing"); watch.performClick(); });
+            var player=(PlayerActivity)waitForMonitorWithTimeout(monitor,15000); removeMonitor(monitor);
+            if(player==null) throw new AssertionError("Saved episode opened a menu instead of playing");
+            try { if("local.mapp.media".equals(player.getIntent().getData().getAuthority())) throw new AssertionError("Completed episode streamed instead of local file"); }
+            finally { runOnMainSync(player::finish); }
+            var screen=MainActivity.class.getDeclaredField("screen"); screen.setAccessible(true);
+            if(!"movie".equals(screen.get(activity))) throw new AssertionError("Saved playback lost card");
+        } finally {
+            runOnMainSync(activity::finish);
+            var all=Library.all(context); for(int i=0;i<all.length();i++) { var row=all.getJSONObject(i); if(row.optString("movie").equals(movie)) FolderLibrary.remove(context,row); }
+        }
+    }
     private void checkNavigation(Api api) throws Exception {
         var context=getTargetContext();
         var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -132,6 +259,7 @@ public final class StreamInstrumentation extends Instrumentation {
     }
     private void checkEpisodes(Api api) throws Exception {
         var context=getTargetContext();
+        context.getSharedPreferences("watch-state",0).edit().clear().commit();
         String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:3")).getString("id");
         var files=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files");
         JSONObject card=null; var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies");
@@ -173,6 +301,18 @@ public final class StreamInstrumentation extends Instrumentation {
                 Thread.sleep(200);
             }
             if(!saved) throw new AssertionError("Independent episode checkpoint did not persist");
+            var screen=MainActivity.class.getDeclaredField("screen"); screen.setAccessible(true);
+            if(!screen.get(activity).equals("movie")) throw new AssertionError("Player returned to home instead of card");
+            var recreation=addMonitor(MainActivity.class.getName(),null,false);
+            runOnMainSync(activity::recreate);
+            var replacement=(MainActivity)waitForMonitorWithTimeout(recreation,15000); removeMonitor(recreation);
+            if(replacement==null) throw new AssertionError("Main activity did not recreate");
+            try {
+                waitForIdleSync();
+                if(!screen.get(replacement).equals("movie")) throw new AssertionError("Recreation lost movie card");
+                var cardField=MainActivity.class.getDeclaredField("currentMovie"); cardField.setAccessible(true);
+                if(!((JSONObject)cardField.get(replacement)).optString("id").equals(mid)) throw new AssertionError("Recreation restored wrong movie");
+            } finally { runOnMainSync(replacement::finish); }
         } finally { runOnMainSync(activity::finish); }
     }
     private android.view.View find(android.view.View root,java.util.function.Predicate<android.view.View> match) {
@@ -326,6 +466,9 @@ public final class StreamInstrumentation extends Instrumentation {
             if(player.getTime()<4000 || player.getAudioTracksCount()<1 || player.getVideoTracksCount()<1) throw new AssertionError("Decoder did not play");
             var media=player.getMedia(); var stats=media.getStats(); media.release();
             if(stats==null || stats.displayedPictures<=0) throw new AssertionError("No video frames displayed");
+            runOnMainSync(()->{ try { var show=PlayerActivity.class.getDeclaredMethod("showControls"); show.setAccessible(true); show.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } });
+            waitForIdleSync();
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"player033.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
             long target=player.getLength()-5000; runOnMainSync(()->player.setTime(target));
             deadline=System.currentTimeMillis()+20000;
             int displayed=stats.displayedPictures; boolean tailPlayed=false;
@@ -347,6 +490,18 @@ public final class StreamInstrumentation extends Instrumentation {
             var context=getTargetContext();
             Api api=new Api(context);
             integrityChecks();
+            if(arguments!=null && arguments.containsKey("seasons033")) {
+                checkSeasons033(api); result.putString("stream","PASS: multi-season pack splits episodes, selected season downloads, all seasons queue without duplicate episodes");
+                finish(Activity.RESULT_OK,result); return;
+            }
+            if(arguments!=null && arguments.containsKey("external033")) {
+                checkExternal033(api); result.putString("stream","PASS: external VLC plays incomplete AVI via buffered HTTP and returns position to movie card");
+                finish(Activity.RESULT_OK,result); return;
+            }
+            if(arguments!=null && arguments.containsKey("feedback033")) {
+                check033(api); result.putString("stream","PASS: two-level series menu, season download queue, individual episode labels/delete buttons, local HTTP prefix and concurrent playback checkpoint");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("navigation")) {
                 checkNavigation(api); result.putString("stream","PASS: equal home buttons, golden-ratio settings buttons, search query/results/scroll restored after movie");
                 finish(Activity.RESULT_OK,result); return;

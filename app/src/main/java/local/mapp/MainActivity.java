@@ -41,21 +41,36 @@ public final class MainActivity extends Activity {
     private Dialog screenshotDialog;
     private LinearLayout searchReturnRoot, searchReturnBody;
     private boolean sourceLoading;
+    private boolean folderPrompt, batchDownload;
+    private String playingUri="";
+    private final ArrayList<JSONObject> pendingBatch=new ArrayList<>();
     interface Job { JSONObject run() throws Exception; }
     interface Result { void accept(JSONObject data) throws Exception; }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); prefs=getSharedPreferences("settings",0);
         Diagnostics.init(this); Diagnostics.event("lifecycle","MainActivity created");
-        if(state!=null) { playingMovie=state.getString("playingMovie",""); playingEpisode=state.getString("playingEpisode",""); playingTorrent=state.getString("playingTorrent",""); playingFile=state.getInt("playingFile"); }
-        handle(getIntent());
+        if(state!=null) { playingMovie=state.getString("playingMovie",""); playingEpisode=state.getString("playingEpisode",""); playingTorrent=state.getString("playingTorrent",""); playingFile=state.getInt("playingFile"); playingUri=state.getString("playingUri",""); try { if(state.containsKey("pendingDownload")) pendingDownload=new JSONObject(state.getString("pendingDownload")); JSONArray batch=new JSONArray(state.getString("pendingBatch","[]")); for(int i=0;i<batch.length();i++) pendingBatch.add(batch.getJSONObject(i)); } catch(Exception ignored) { } }
+        if(state!=null && state.getString("card")!=null) {
+            try { page("movie","Карточка фильма"); preferredRelease=state.getString("release",""); preferredEpisode=state.getString("episode",""); showMovie(new JSONObject(state.getString("card"))); }
+            catch(Exception e) { handle(getIntent()); }
+        } else handle(getIntent());
+        if(!prefs.getBoolean("folder_prompted",false) && prefs.getString("folder","").isEmpty()) ui.post(()->{
+            if(isFinishing() || folderPrompt) return; folderPrompt=true;
+            new AlertDialog.Builder(this).setTitle("Папка для скачивания").setMessage("Выберите папку для видео. Если есть карта памяти, можно выбрать папку на ней. Файлы останутся после удаления приложения.")
+                .setPositiveButton("Выбрать папку",(d,n)->pickFolder(101)).setNegativeButton("Позже",(d,n)->prefs.edit().putBoolean("folder_prompted",true).apply()).show();
+        });
     }
-    @Override protected void onSaveInstanceState(Bundle state) { super.onSaveInstanceState(state); state.putString("playingMovie",playingMovie); state.putString("playingEpisode",playingEpisode); state.putString("playingTorrent",playingTorrent); state.putInt("playingFile",playingFile); }
+    @Override protected void onSaveInstanceState(Bundle state) { super.onSaveInstanceState(state); state.putString("playingMovie",playingMovie); state.putString("playingEpisode",playingEpisode); state.putString("playingTorrent",playingTorrent); state.putInt("playingFile",playingFile);
+        if(screen.equals("movie") && currentMovie!=null) { state.putString("card",currentMovie.toString()); state.putString("release",selectedRelease); state.putString("episode",selectedEpisode); }
+        if(pendingDownload!=null) state.putString("pendingDownload",pendingDownload.toString());
+        state.putString("pendingBatch",new JSONArray(pendingBatch).toString()); state.putString("playingUri",playingUri);
+    }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handle(intent); }
     private void handle(Intent intent) {
         Uri uri=intent.getData();
         if(uri!=null && "mapp".equals(uri.getScheme()) && "pair".equals(uri.getHost())) { pair(uri); intent.setData(null); }
-        else if(intent.getBooleanExtra("library",false)) library(); else home();
+        else if(intent.getBooleanExtra("library",false)) { intent.removeExtra("library"); library(); } else if(root==null) home();
     }
     private int dp(int n) { return (int)(n*getResources().getDisplayMetrics().density); }
     private GradientDrawable rounded(int color) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(18)); return d; }
@@ -219,14 +234,15 @@ public final class MainActivity extends Activity {
         ImageView image=new ImageView(this); image.setImageResource(R.drawable.camera); row.addView(image,new LinearLayout.LayoutParams(dp(43),dp(61))); loadPoster(image,item.optString(item.has("state")?"movie":"id"));
         savedPoster(image,item.optJSONObject("card"));
         LinearLayout info=new LinearLayout(this); info.setOrientation(LinearLayout.VERTICAL); info.setPadding(dp(14),0,0,0);
-        TextView title=text(item.optString("title"),17,0xff29201a); title.setMaxLines(2); info.addView(title);
+        TextView title=text(item.optString("title"),17,0xff29201a); title.setMaxLines(2); title.setEllipsize(TextUtils.TruncateAt.END); info.addView(title);
+        if(item.optBoolean("series") || !item.optString("episode").isEmpty()) { TextView episode=text(episodeLabel(item),14,ACCENT); episode.setMaxLines(1); episode.setEllipsize(TextUtils.TruncateAt.END); info.addView(episode); }
         info.addView(text(item.optString("year"),13,0xff6e625a));
         TextView director=text(director(item),13,0xff6e625a); director.setTag("director"); director.setMaxLines(2); director.setEllipsize(TextUtils.TruncateAt.END); info.addView(director);
         if(item.has("state")) { TextView progress=text(stateLabel(item),13,ACCENT); progress.setTag(item.optString("id")); info.addView(progress); }
         int maxText=Math.max(dp(100),getResources().getDisplayMetrics().widthPixels-dp(130));
         title.setMaxWidth(maxText); director.setMaxWidth(maxText);
-        row.addView(info,new LinearLayout.LayoutParams(-2,-2)); row.setOnClickListener(v->click.run());
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-2,-2); p.setMargins(0,dp(6),0,dp(6)); row.setLayoutParams(p); return row;
+        row.addView(info,new LinearLayout.LayoutParams(0,-2,1)); row.setOnClickListener(v->click.run());
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2); p.setMargins(0,dp(6),0,dp(6)); row.setLayoutParams(p); return row;
     }
     private String director(JSONObject item) {
         JSONObject card=item.optJSONObject("card"); String value=item.optString("director",card==null?"":card.optString("director"));
@@ -245,7 +261,7 @@ public final class MainActivity extends Activity {
     }
     private void movie(String id) {
         if(screen.equals("search")) { searchReturnRoot=root; searchReturnBody=body; }
-        preferredRelease="";
+        preferredRelease=""; preferredEpisode="";
         page("movie","Карточка фильма"); body.addView(text("Обновляем раздачи и доступность источников…",16,MUTED));
         task(()->request("GET","/v1/movies/"+id,null),this::showMovie);
     }
@@ -314,18 +330,20 @@ public final class MainActivity extends Activity {
         } catch(Exception e) { ui.post(()->{ if(dialog.isShowing()) loading.setText("Скриншот сейчас недоступен"); }); } });
     }
     private void showMovie(JSONObject data) throws Exception {
-        generation++; chosenFile=null; chosenTorrent=""; selectedEpisode=""; preferredEpisode="";
+        generation++; chosenFile=null; chosenTorrent=""; selectedEpisode="";
         currentMovie=data; body.removeAllViews(); section(data.getString("title"));
         ImageView poster=new ImageView(this); poster.setImageResource(R.drawable.camera); body.addView(poster,new LinearLayout.LayoutParams(-1,dp(156))); loadPoster(poster,data.optString("id"));
         savedPoster(poster,data);
         body.addView(text(data.optString("year")+"  "+data.optString("director"),15,MUTED));
         body.addView(text(data.optString("description").isEmpty()?"Описание пока не предоставлено источником":data.optString("description"),16,TEXT));
-        JSONArray allReleases=data.getJSONArray("releases"); TreeSet<String> seasons=new TreeSet<>();
-        for(int i=0;i<allReleases.length();i++) { String season=allReleases.optJSONObject(i).optString("season"); if(!season.isEmpty()) seasons.add(season); }
+        JSONArray allReleases=data.getJSONArray("releases"); TreeSet<String> seasons=new TreeSet<>((a,b)->{ try { return Integer.compare(Integer.parseInt(a),Integer.parseInt(b)); } catch(Exception e) { return a.compareTo(b); } });
+        for(int i=0;i<allReleases.length();i++) seasons.addAll(releaseSeasons(allReleases.optJSONObject(i)));
         String chosen=data.optString("chosen_season",seasons.isEmpty()?"":seasons.first());
         if(!data.has("chosen_season")) {
             for(JSONObject item:matchingSaved(data)) { if(!item.optString("state").equals("complete") || item.optString("release").equals(preferredRelease))
-                for(int n=0;n<allReleases.length();n++) if(item.optString("release").equals(allReleases.optJSONObject(n).optString("id"))) chosen=allReleases.optJSONObject(n).optString("season"); }
+                for(int n=0;n<allReleases.length();n++) if(item.optString("release").equals(allReleases.optJSONObject(n).optString("id"))) { var candidates=releaseSeasons(allReleases.optJSONObject(n)); if(!candidates.isEmpty()) chosen=item.has("season") && !item.isNull("season")?""+item.optInt("season"):candidates.iterator().next(); } }
+            JSONObject resume=data.optJSONObject("resume");
+            if(resume!=null) for(int n=0;n<allReleases.length();n++) if(resume.optString("release").equals(allReleases.optJSONObject(n).optString("id"))) { var candidates=releaseSeasons(allReleases.optJSONObject(n)); if(!candidates.isEmpty()) chosen=candidates.iterator().next(); }
         }
         if(!seasons.isEmpty()) {
             section("Сезон"); ArrayList<String> choices=new ArrayList<>(seasons); choices.add("Все сезоны"); String selection=chosen;
@@ -338,9 +356,10 @@ public final class MainActivity extends Activity {
                     if(!choices.get(n).equals(selection)) try { data.put("chosen_season",choices.get(n)); showMovie(data); } catch(Exception e) { error(e); }
                 }
             });
+            if(seasons.size()>1) body.addView(button("Скачать все сезоны",()->saveAllSeasons(data)));
         }
         JSONArray releases=new JSONArray();
-        for(int i=0;i<allReleases.length();i++) { JSONObject r=allReleases.optJSONObject(i); if(chosen.isEmpty() || chosen.equals("Все сезоны") || r.optString("season").equals(chosen)) releases.put(r); }
+        for(int i=0;i<allReleases.length();i++) { JSONObject r=allReleases.optJSONObject(i); if(chosen.isEmpty() || chosen.equals("Все сезоны") || releaseSeasons(r).contains(chosen)) releases.put(r); }
         if(releases.length()==0) { savedActions(data); return; }
         divider(); section("Качество");
         String[] labels=new String[releases.length()]; int selected=0;
@@ -388,6 +407,8 @@ public final class MainActivity extends Activity {
         Button watch=button(data.optLong("position")>0?"Продолжить просмотр":"Смотреть",()->{});
         View.OnClickListener streamWatch=v->{
             if(sourceLoading) return;
+            ArrayList<JSONObject> local=selectedSaved(data);
+            if(!local.isEmpty()) { playSavedChoices(local); return; }
             watch.setTag(Boolean.TRUE);
             if(chosenFile!=null) {
                 selectedRelease=releases.optJSONObject(spinner.getSelectedItemPosition()).optString("id");
@@ -447,7 +468,7 @@ public final class MainActivity extends Activity {
                         ui.post(()->{
                             checkingBuffer[0]=false;
                             if(cardGeneration!=generation || currentMovie!=data || !rid.equals(releases.optJSONObject(spinner.getSelectedItemPosition()).optString("id")) || Boolean.TRUE.equals(watch.getTag())) return;
-                            boolean ready=result==null || result.optBoolean("ready");
+                             boolean ready=result!=null && result.optBoolean("ready");
                             watch.setVisibility(ready?View.VISIBLE:View.GONE); watch.setEnabled(ready);
                             watch.setText(data.optLong("position")>0?"Продолжить просмотр":"Смотреть");
                             if(!ready) download.setText(stateLabel(local)+" · буфер: "+(result.isNull("buffer_eta")?"ожидание пиров":result.optInt("buffer_eta")+" с"));
@@ -484,31 +505,50 @@ public final class MainActivity extends Activity {
                     chosenTorrent=key;
                     ArrayList<JSONObject> ordered=new ArrayList<>(); for(int i=0;i<files.length();i++) ordered.add(files.optJSONObject(i));
                     ordered.sort(Comparator.comparingInt((JSONObject f)->f.optInt("season",0)).thenComparingInt(f->f.optInt("number",Integer.MAX_VALUE)).thenComparing(f->f.optString("name")));
-                    String[] names=new String[ordered.size()]; int selected=0; JSONObject resume=currentMovie.optJSONObject("resume");
-                    for(int i=0;i<names.length;i++) {
-                        JSONObject file=ordered.get(i);
-                        names[i]=file.isNull("number")?file.optString("name"):"Сезон "+file.optInt("season")+" · Серия "+file.optInt("number");
-                        if(file.optBoolean("completed")) names[i]+=" · просмотрено"; else if(file.optLong("position")>0) names[i]+=" · продолжить";
+                     int selected=0; JSONObject resume=currentMovie.optJSONObject("resume");
+                     for(int i=0;i<ordered.size();i++) {
+                         JSONObject file=ordered.get(i);
                         if(resume!=null && key.equals(resume.optString("torrent")) && file.optInt("index")==resume.optInt("file")) selected=i;
                         if(!preferredEpisode.isEmpty() && preferredEpisode.equals(file.optString("episode"))) selected=i;
                     }
-                    java.util.function.Consumer<JSONObject> choose=file->{
-                        chosenFile=file; selectedEpisode=file.optString("episode");
+                     java.util.function.Consumer<JSONObject> choose=file->{
+                         chosenFile=file; selectedEpisode=file.optString("episode");
+                         try { file.put("position",WatchState.position(this,currentMovie.optString("id"),selectedEpisode,key,file.optInt("index"),file.optLong("position"))); } catch(Exception ignored) { }
                         try { if(file.has("episode")) currentMovie.put("position",file.optLong("position")); } catch(Exception ignored) { }
                         showMediaInfo(key,file,audio,selection,0);
                     };
-                    panel.removeAllViews();
-                    if(files.length()>1 || release.optBoolean("series")) {
-                        panel.addView(text("Серия / файл",18,TEXT)); Spinner episodes=new Spinner(MainActivity.this);
-                        episodes.setTag("episode-selector");
-                        episodes.setAdapter(new ArrayAdapter<>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,names));
-                        episodes.setSelection(selected); panel.addView(episodes);
-                        episodes.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-                            public void onNothingSelected(AdapterView<?> p) { }
-                            public void onItemSelected(AdapterView<?> p,View v,int n,long id) { if(v instanceof TextView) ((TextView)v).setTextColor(TEXT); choose.accept(ordered.get(n)); }
-                        });
-                    }
-                    choose.accept(ordered.get(selected));
+                     panel.removeAllViews();
+                     if(files.length()>1 || release.optBoolean("series")) {
+                         TreeMap<Integer,ArrayList<JSONObject>> groups=new TreeMap<>();
+                         for(JSONObject file:ordered) groups.computeIfAbsent(file.optInt("season",0),n->new ArrayList<>()).add(file);
+                         ArrayList<Integer> keys=new ArrayList<>(groups.keySet());
+                         ArrayList<String> seasonNames=new ArrayList<>(); for(int n:keys) seasonNames.add(n==0?"Другие файлы":"Сезон "+n);
+                         panel.addView(text("Сезон",18,TEXT)); Spinner seasons=new Spinner(MainActivity.this); seasons.setTag("file-season-selector");
+                         seasons.setAdapter(new ArrayAdapter<>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,seasonNames)); panel.addView(seasons);
+                         LinearLayout episodeBox=new LinearLayout(MainActivity.this); episodeBox.setOrientation(LinearLayout.VERTICAL); panel.addView(episodeBox);
+                         JSONObject initial=ordered.get(selected); int seasonIndex=keys.indexOf(initial.optInt("season",0));
+                         String requested=currentMovie.optString("chosen_season");
+                         try { int explicit=keys.indexOf(Integer.parseInt(requested)); if(explicit>=0) seasonIndex=explicit; } catch(Exception ignored) { }
+                         seasons.setSelection(Math.max(0,seasonIndex));
+                         seasons.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                             public void onNothingSelected(AdapterView<?> p) { }
+                             public void onItemSelected(AdapterView<?> p,View v,int n,long id) {
+                                 if(v instanceof TextView) ((TextView)v).setTextColor(TEXT);
+                                 ArrayList<JSONObject> items=groups.get(keys.get(n)); episodeBox.removeAllViews();
+                                 ArrayList<String> labels=new ArrayList<>(); int index=0;
+                                 for(int j=0;j<items.size();j++) { JSONObject f=items.get(j); labels.add(episodeLabel(f)+(f.optBoolean("completed")?" · просмотрено":f.optLong("position")>0?" · продолжить":"")); if(f==initial) index=j; }
+                                 episodeBox.addView(text("Серия",18,TEXT)); Spinner episodes=new Spinner(MainActivity.this); episodes.setTag("episode-selector");
+                                 episodes.setAdapter(new ArrayAdapter<>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,labels)); episodes.setSelection(index); episodeBox.addView(episodes);
+                                 episodes.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                                     public void onNothingSelected(AdapterView<?> parent) { }
+                                     public void onItemSelected(AdapterView<?> parent,View view,int i,long value) { if(view instanceof TextView) ((TextView)view).setTextColor(TEXT); choose.accept(items.get(i)); }
+                                 });
+                                 choose.accept(items.get(index));
+                                 episodeBox.addView(button("Скачать сезон",()->saveBatch(key,items,release)));
+                             }
+                         });
+                         if(groups.size()>1) panel.addView(button("Скачать все сезоны раздачи",()->saveBatch(key,ordered,release)));
+                     } else choose.accept(ordered.get(selected));
                 });
             } catch(Exception e) {
                 Diagnostics.event("source-error",e.getClass().getSimpleName());
@@ -534,19 +574,50 @@ public final class MainActivity extends Activity {
         });
     }
     private void playSaved(JSONObject item) {
-        selectedTorrent=""; selectedEpisode=item.optString("episode");
+        selectedTorrent=""; selectedFile=0; selectedEpisode=item.optString("episode");
         String[] parts=item.optString("path").split("/");
         if(parts.length==6) try { selectedTorrent=parts[3]; selectedFile=Integer.parseInt(parts[5]); } catch(Exception ignored) { }
-        play(Uri.parse(item.optString("uri")),item.optString("movie"),item.optLong("position",currentMovie==null?0:currentMovie.optLong("position")));
+        long position=item.optLong("position");
+        if(chosenFile!=null && selectedEpisode.equals(chosenFile.optString("episode"))) position=chosenFile.optLong("position",position);
+        position=WatchState.position(this,item.optString("movie"),selectedEpisode,selectedTorrent,selectedFile,position);
+        if(!item.optString("state").equals("complete")) {
+            try {
+                if(currentMovie==null || !currentMovie.optString("id").equals(item.optString("movie"))) currentMovie=new JSONObject().put("id",item.optString("movie")).put("position",position);
+                JSONObject file=new JSONObject().put("index",selectedFile).put("size",item.getLong("size")).put("name",item.optString("name")).put("episode",selectedEpisode).put("position",position);
+                Button watch=button("Подготовка видео…",()->{}); body.addView(watch); buffer(selectedTorrent,file,watch,System.currentTimeMillis());
+            } catch(Exception e) { error(e); } return;
+        }
+        play(Uri.parse(item.optString("uri")),item.optString("movie"),position);
     }
     private void savedActions(JSONObject data) {
         Button open=button("Открыть сохранённое",()->{
-            ArrayList<JSONObject> matches=matchingSaved(data);
-            String[] names=new String[matches.size()]; for(int i=0;i<names.length;i++) names[i]=matches.get(i).optString("name",matches.get(i).optString("title"))+" · "+stateLabel(matches.get(i));
-            new AlertDialog.Builder(this).setTitle("Сохранённые файлы").setItems(names,(d,n)->openSaved(matches.get(n))).show();
+            playSavedChoices(selectedSaved(data));
         }); body.addView(open);
         int version=generation;
-        Runnable refresh=new Runnable() { public void run() { if(version!=generation || currentMovie!=data) return; open.setEnabled(!matchingSaved(data).isEmpty()); ui.postDelayed(this,2000); } }; refresh.run();
+        Runnable refresh=new Runnable() { public void run() { if(version!=generation || currentMovie!=data) return; open.setEnabled(!selectedSaved(data).isEmpty()); ui.postDelayed(this,2000); } }; refresh.run();
+    }
+    private static java.util.Set<String> releaseSeasons(JSONObject release) {
+        TreeSet<String> values=new TreeSet<>(Comparator.comparingInt(s->{ try { return Integer.parseInt(s); } catch(Exception e) { return Integer.MAX_VALUE; } }));
+        String value=release.optString("season");
+        if(value.matches("\\d{1,3}-\\d{1,3}")) { String[] ends=value.split("-"); int a=Integer.parseInt(ends[0]), b=Integer.parseInt(ends[1]); if(b-a<=100) for(int n=a;n<=b;n++) values.add(""+n); }
+        else if(!value.isEmpty()) values.add(value); return values;
+    }
+    private String episodeLabel(JSONObject item) {
+        if(!item.isNull("number") && item.has("number")) return "Сезон "+item.optInt("season")+" · Серия "+item.optInt("number");
+        var match=java.util.regex.Pattern.compile("s(\\d+)e(\\d+)").matcher(item.optString("episode"));
+        if(match.matches()) return "Сезон "+Integer.parseInt(match.group(1))+" · Серия "+Integer.parseInt(match.group(2));
+        return item.optString("name","Серия / файл");
+    }
+    private ArrayList<JSONObject> selectedSaved(JSONObject data) {
+        ArrayList<JSONObject> result=matchingSaved(data);
+        if(chosenFile!=null) result.removeIf(item->item.optBoolean("series") && !(item.optString("path").equals("/v1/torrents/"+chosenTorrent+"/files/"+chosenFile.optInt("index")) || (!chosenFile.optString("episode").isEmpty() && chosenFile.optString("episode").equals(item.optString("episode")))));
+        return result;
+    }
+    private void playSavedChoices(ArrayList<JSONObject> items) {
+        if(items.isEmpty()) return;
+        if(items.size()==1) { playSaved(items.get(0)); return; }
+        String[] labels=new String[items.size()]; for(int i=0;i<labels.length;i++) labels[i]=items.get(i).optString("name")+" · "+stateLabel(items.get(i));
+        new AlertDialog.Builder(this).setTitle("Выберите качество").setItems(labels,(d,n)->playSaved(items.get(n))).show();
     }
     private ArrayList<JSONObject> matchingSaved(JSONObject data) {
         ArrayList<JSONObject> matches=new ArrayList<>(); JSONArray saved=Library.all(this), releases=data.optJSONArray("releases"), aliases=data.optJSONArray("aliases");
@@ -655,38 +726,62 @@ public final class MainActivity extends Activity {
     }
     private void play(Uri uri,String movie,long position) {
         playingMovie=movie;
+        playingUri=uri.toString();
         playingEpisode=selectedEpisode; playingTorrent=selectedTorrent; playingFile=selectedFile;
         if(!prefs.getBoolean("external_player",false)) {
             Intent embedded=new Intent(this,PlayerActivity.class).setData(uri).putExtra("movie",movie).putExtra("position",position).putExtra("torrent",selectedTorrent).putExtra("file",selectedFile).putExtra("episode",selectedEpisode);
             if(!"local.mapp.media".equals(uri.getAuthority())) embedded.putExtra("saved_uri",uri.toString());
             startActivityForResult(embedded,200); return;
         }
+        if("local.mapp.media".equals(uri.getAuthority())) {
+            int version=generation;
+            Toast.makeText(this,"Буферизация на телефоне…",Toast.LENGTH_LONG).show();
+            io.submit(()->{ PlaybackBridge stream=null; try {
+                JSONObject media=MediaProvider.describe(this,uri); stream=new PlaybackBridge(this,media.getString("path"),media.getLong("size"));
+                JSONObject info=request("GET",media.getString("path")+"/info",null);
+                stream.prime(position,info.optLong("duration_ms"),prefs.getInt("buffer",15));
+                PlaybackBridge ready=stream;
+                ui.post(()->{ if(version!=generation || isFinishing()) { ready.close(); return; } launchExternal(Uri.parse(PlaybackService.open(this,ready)),movie,position); });
+            } catch(Exception e) { if(stream!=null) stream.close(); ui.post(()->{ if(version==generation) error(e); }); } });
+        } else launchExternal(uri,movie,position);
+    }
+    private void launchExternal(Uri uri,String movie,long position) {
         Intent intent=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.setClipData(ClipData.newRawUri("MApp video",uri));
         intent.putExtra("position",(int)position); intent.putExtra("from_start",position==0); intent.putExtra("return_result",true);
         intent.putExtra("extra_position",position);
         String torrent=selectedTorrent, episode=selectedEpisode; int file=selectedFile;
-        try { startActivityForResult(Intent.createChooser(intent,"Открыть в плеере"),200); if(!movie.isEmpty()) io.submit(()->{ try {
+        java.util.function.Consumer<android.content.pm.ResolveInfo> launch=handler->{ try {
+            intent.setComponent(new ComponentName(handler.activityInfo.packageName,handler.activityInfo.name));
+            Diagnostics.event("external-player","launch "+handler.activityInfo.packageName+" position="+position);
+            startActivityForResult(intent,200); if(!movie.isEmpty()) io.submit(()->{ try {
             JSONObject update=new JSONObject().put("position",position); if(!torrent.isEmpty()) update.put("torrent",torrent).put("file",file);
             if(!episode.isEmpty()) update.put("episode",episode);
             request("PUT","/v1/history/"+movie,update);
-        } catch(Exception ignored) { } }); }
-        catch(ActivityNotFoundException e) { notice("Установите внешний видеоплеер, например VLC или MX Player."); }
+        } catch(Exception ignored) { } });
+        } catch(ActivityNotFoundException e) { stopService(new Intent(this,PlaybackService.class)); notice("Внешний плеер недоступен"); } };
+        var handlers=getPackageManager().queryIntentActivities(intent,android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+        if(handlers.isEmpty()) { stopService(new Intent(this,PlaybackService.class)); notice("Установите внешний видеоплеер, например VLC, mpv-android или MX Player."); }
+        else if(handlers.size()==1) launch.accept(handlers.get(0));
+        else { String[] labels=new String[handlers.size()]; for(int i=0;i<labels.length;i++) labels[i]=handlers.get(i).loadLabel(getPackageManager()).toString();
+            new AlertDialog.Builder(this).setTitle("Открыть в плеере").setItems(labels,(d,n)->launch.accept(handlers.get(n))).setOnCancelListener(d->stopService(new Intent(this,PlaybackService.class))).show(); }
     }
     private void saveFile(String torrent,JSONObject file) {
         try {
             String mediaPath="/v1/torrents/"+torrent+"/files/"+file.getInt("index");
             JSONArray saved=Library.all(this); String server=new Api(this).server;
-            for(int i=0;i<saved.length();i++) if(saved.optJSONObject(i).optString("path").equals(mediaPath) && saved.optJSONObject(i).optString("server").equals(server)) { library(); return; }
+            for(int i=0;i<saved.length();i++) if(saved.optJSONObject(i).optString("path").equals(mediaPath) && saved.optJSONObject(i).optString("server").equals(server)) { if(!batchDownload) library(); return; }
+            for(JSONObject item:pendingBatch) if(item.optString("path").equals(mediaPath) && item.optString("server").equals(server)) return;
             String filename=file.getString("name"); filename=filename.substring(filename.lastIndexOf('/')+1);
             JSONObject cardCopy=new JSONObject(currentMovie.toString()); cardCopy.put("server",server).put("poster_thumbnail",ImageCache.thumbnail(this,server,currentMovie.optString("id")));
             pendingDownload=new JSONObject().put("id",UUID.randomUUID().toString()).put("movie",currentMovie.getString("id"))
                 .put("title",currentMovie.getString("title")).put("year",currentMovie.optString("year")).put("director",currentMovie.optString("director"))
                 .put("path",mediaPath).put("release",selectedRelease).put("series",selectedSeries).put("size",file.getLong("size"))
-                .put("episode",file.optString("episode")).put("position",file.optLong("position"))
+                .put("episode",file.optString("episode")).put("season",file.opt("season")).put("number",file.opt("number")).put("position",file.optLong("position"))
                 .put("name",filename).put("server",new Api(this).server).put("state","queued").put("card",cardCopy);
-            if(prefs.getBoolean("ask_path",true)) {
-                startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),103);
+            if(batchDownload) { pendingBatch.add(pendingDownload); pendingDownload=null; return; }
+            if(prefs.getBoolean("ask_path",false) || prefs.getString("folder","").isEmpty()) {
+                pickFolder(103);
             } else {
                 String folder=prefs.getString("folder",""); Uri uri;
                 if(!folder.isEmpty()) {
@@ -700,13 +795,70 @@ public final class MainActivity extends Activity {
             }
         } catch(Exception e) { error(e); }
     }
+    private void pickFolder(int request) {
+        Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        String folder=prefs.getString("folder","");
+        if(!folder.isEmpty()) picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI,Uri.parse(folder));
+        else for(var volume:getSystemService(android.os.storage.StorageManager.class).getStorageVolumes()) if(volume.isRemovable() && volume.getState().equals(Environment.MEDIA_MOUNTED)) { picker=volume.createOpenDocumentTreeIntent(); break; }
+        startActivityForResult(picker,request);
+    }
+    private void saveBatch(String torrent,ArrayList<JSONObject> files,JSONObject release) {
+        if(!pendingBatch.isEmpty()) return;
+        selectedRelease=release.optString("id"); selectedSeries=true; batchDownload=true;
+        try { for(JSONObject file:files) saveFile(torrent,file); } finally { batchDownload=false; }
+        if(pendingBatch.isEmpty()) { Toast.makeText(this,"Эти серии уже добавлены",Toast.LENGTH_SHORT).show(); return; }
+        if(prefs.getBoolean("ask_path",false) || prefs.getString("folder","").isEmpty()) pickFolder(104);
+        else startBatch(Uri.parse(prefs.getString("folder","")));
+    }
+    private void saveAllSeasons(JSONObject card) {
+        JSONArray releases=card.optJSONArray("releases"); if(releases==null) return;
+        LinkedHashMap<String,JSONObject> choices=new LinkedHashMap<>(); String quality=prefs.getString("quality","1080p");
+        for(int i=0;i<releases.length();i++) { JSONObject r=releases.optJSONObject(i);
+            for(String season:releaseSeasons(r)) { JSONObject prior=choices.get(season);
+                if(prior==null || (!prior.optString("resolution").equals(quality) && r.optString("resolution").equals(quality)) || (prior.optString("resolution").equals(r.optString("resolution")) && r.optInt("seeds")>prior.optInt("seeds"))) choices.put(season,r);
+            }
+        }
+        LinkedHashMap<String,JSONObject> unique=new LinkedHashMap<>(); for(JSONObject r:choices.values()) unique.put(r.optString("id"),r);
+        if(unique.isEmpty()) return;
+        boolean[] cancelled={false}; int version=generation;
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Подготовка всех сезонов").setMessage("Получаем списки серий. Качество: "+quality+" (при наличии).")
+            .setNegativeButton("Отмена",(d,n)->cancelled[0]=true).setOnCancelListener(d->cancelled[0]=true).show();
+        io.submit(()->{ ArrayList<JSONObject> ready=new ArrayList<>(); try {
+            for(JSONObject release:unique.values()) {
+                if(cancelled[0] || version!=generation) return;
+                String key=request("POST","/v1/torrents",new JSONObject().put("release",release.optString("id"))).getString("id"); long until=System.currentTimeMillis()+120000;
+                while(true) {
+                    if(cancelled[0] || version!=generation) return;
+                    JSONObject state=request("GET","/v1/torrents/"+key,null); JSONArray files=state.getJSONArray("files");
+                    if(!state.isNull("error") && !state.optString("error").isEmpty()) throw new java.io.IOException(state.optString("error"));
+                    if(files.length()>0) { for(int i=0;i<files.length();i++) { JSONObject file=files.getJSONObject(i); String season=file.isNull("season")?"":""+file.optInt("season");
+                        if(season.isEmpty() || choices.get(season)==release) ready.add(new JSONObject().put("torrent",key).put("file",file).put("release",release)); } break; }
+                    if(System.currentTimeMillis()>until) throw new java.io.IOException("Не удалось получить список серий. Выберите другую раздачу.");
+                    Thread.sleep(1500);
+                }
+            }
+            ui.post(()->{ dialog.dismiss(); if(cancelled[0] || version!=generation) return; batchDownload=true;
+                try { for(JSONObject item:ready) { selectedRelease=item.optJSONObject("release").optString("id"); selectedSeries=true; saveFile(item.optString("torrent"),item.optJSONObject("file")); } }
+                finally { batchDownload=false; }
+                if(pendingBatch.isEmpty()) { Toast.makeText(this,"Все серии уже добавлены",Toast.LENGTH_SHORT).show(); return; }
+                if(prefs.getBoolean("ask_path",false) || prefs.getString("folder","").isEmpty()) pickFolder(104); else startBatch(Uri.parse(prefs.getString("folder","")));
+            });
+        } catch(Exception e) { ui.post(()->{ dialog.dismiss(); if(!cancelled[0] && version==generation) error(e); }); }
+        finally { if(cancelled[0] || version!=generation) ui.post(dialog::dismiss); } });
+    }
+    private void startBatch(Uri tree) {
+        batchDownload=true;
+        try { while(!pendingBatch.isEmpty()) { pendingDownload=pendingBatch.get(0); pendingDownload.put("folder",tree.toString()); startDownload(FolderLibrary.create(this,tree,pendingDownload.getString("name"))); pendingBatch.remove(0); } }
+        catch(Exception e) { pendingBatch.clear(); pendingDownload=null; error(e); }
+        finally { batchDownload=false; library(); }
+    }
     private void startDownload(Uri uri) throws Exception {
         if(uri==null || pendingDownload==null) throw new java.io.IOException("Не удалось создать файл");
         try(var cursor=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)) { if(cursor!=null && cursor.moveToFirst()) pendingDownload.put("name",cursor.getString(0)); }
         pendingDownload.put("uri",uri.toString()).put("queued_at",System.currentTimeMillis()); Library.put(this,pendingDownload);
         FolderLibrary.backup(this,pendingDownload);
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},300);
-        startForegroundService(new Intent(this,DownloadService.class).putExtra("item",pendingDownload.toString())); pendingDownload=null; library();
+        startForegroundService(new Intent(this,DownloadService.class).putExtra("item",pendingDownload.toString())); pendingDownload=null; if(!batchDownload) library();
     }
     private String stateLabel(JSONObject item) {
         return switch(item.optString("state")) {
@@ -716,7 +868,7 @@ public final class MainActivity extends Activity {
         };
     }
     private void library() {
-        page("library","Сохранённое");
+        page("library","Скачанное");
         ArrayList<JSONObject> items=new ArrayList<>(); JSONArray all=Library.all(this); for(int i=0;i<all.length();i++) items.add(all.optJSONObject(i));
         for(JSONObject item:items) {
             String state=item.optString("state");
@@ -726,10 +878,16 @@ public final class MainActivity extends Activity {
         }
         items.sort(Comparator.comparing((JSONObject j)->j.optString("state").equals("complete")).thenComparing(j->j.optString("title"),String.CASE_INSENSITIVE_ORDER));
         if(items.isEmpty()) body.addView(text("Пока пусто. Скачайте фильм из его карточки. После переустановки выберите прежнюю папку в настройках.",16,MUTED));
-        JSONArray grouped=Library.grouped(this);
-        for(int i=0;i<grouped.length();i++) {
-            JSONObject item=grouped.optJSONObject(i); LinearLayout row=(LinearLayout)movieRow(item,()->savedCard(item));
-            row.addView(button("Удалить",()->deleteSavedGroup(item))); body.addView(row);
+        for(JSONObject item:items) {
+            LinearLayout row=(LinearLayout)movieRow(item,()->{ if(item.optString("state").equals("paused")) {
+                new AlertDialog.Builder(this).setItems(new String[]{"Смотреть","Продолжить загрузку"},(d,n)->{ if(n==0) playSaved(item); else { startForegroundService(new Intent(this,DownloadService.class).putExtra("item",item.toString())); library(); } }).show();
+            } else playSaved(item); });
+            ImageButton delete=new ImageButton(this); delete.setImageResource(R.drawable.trash); delete.setContentDescription("Удалить файл"); delete.setBackground(rounded(BUTTON)); delete.setPadding(dp(12),dp(12),dp(12),dp(12));
+            delete.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Удалить файл?").setMessage(item.optString("title")+"\n"+episodeLabel(item))
+                .setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,n)->{
+                    task(()->{ if(DownloadService.queued.contains(item.optString("id"))) DownloadService.cancelled.add(item.optString("id")); else FolderLibrary.remove(this,item); return new JSONObject(); },r->library());
+                }).show());
+            LinearLayout.LayoutParams fixed=new LinearLayout.LayoutParams(dp(48),dp(48)); fixed.leftMargin=dp(8); row.addView(delete,fixed); body.addView(row);
         }
         int version=generation;
         Runnable refresh=new Runnable() { public void run() {
@@ -799,11 +957,10 @@ public final class MainActivity extends Activity {
         SeekBar seek=new SeekBar(this); seek.setMin(5); seek.setMax(120); seek.setProgress(prefs.getInt("buffer",15)); body.addView(seek);
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() { public void onStartTrackingTouch(SeekBar s) { } public void onStopTrackingTouch(SeekBar s) { } public void onProgressChanged(SeekBar s,int n,boolean user) { prefs.edit().putInt("buffer",n).apply(); buffer.setText("Буферизация: "+n+" с"); } });
         body.addView(text("Встроенный плеер: AVI/MKV/MP4, перемотка, аудиодорожки, субтитры и сохранение позиции. Внешний плеер можно выбрать выше.",14,MUTED));
-        divider(); section("Загрузки"); Switch ask=new Switch(this); ask.setTextColor(TEXT); ask.setText("Спрашивать место сохранения"); ask.setChecked(prefs.getBoolean("ask_path",true)); body.addView(ask);
+         divider(); section("Загрузки"); Switch ask=new Switch(this); ask.setTextColor(TEXT); ask.setText("Спрашивать место сохранения"); ask.setChecked(prefs.getBoolean("ask_path",false)); body.addView(ask);
         ask.setOnCheckedChangeListener((b,value)->prefs.edit().putBoolean("ask_path",value).apply());
-        body.addView(text(prefs.getString("folder","").isEmpty()?"По умолчанию: Download/MApp":"Выбрана папка на устройстве",15,MUTED));
-        body.addView(button("Выбрать папку по умолчанию",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),101)));
-        body.addView(button("Использовать Download/MApp",()->{ prefs.edit().remove("folder").apply(); settings(); }));
+        body.addView(text(prefs.getString("folder","").isEmpty()?"Выберите папку перед скачиванием":"Выбрана папка на устройстве",15,MUTED));
+        body.addView(button("Выбрать папку",()->pickFolder(101)));
         body.addView(text("Скачанные файлы остаются после удаления MApp. Выберите прежнюю папку — библиотека восстановится автоматически только из неё.",14,MUTED));
         Switch diagnostics=new Switch(this); diagnostics.setText("Расширенное логирование"); diagnostics.setTextColor(TEXT); diagnostics.setChecked(prefs.getBoolean("diagnostics",false)); body.addView(diagnostics);
         body.addView(text("MApp-debug.txt в папке сохранения видео. Доступен по USB. При выключении логи удаляются.",14,MUTED));
@@ -862,7 +1019,11 @@ public final class MainActivity extends Activity {
         super.onActivityResult(request,result,data);
         try {
             if(request==200 && data!=null && !playingMovie.isEmpty()) {
-                long position=data.hasExtra("extra_position")?data.getLongExtra("extra_position",-1):data.getIntExtra("position",-1);
+                Object value=data.getExtras()==null?null:data.getExtras().get(data.hasExtra("extra_position")?"extra_position":"position");
+                long position=value instanceof Number?((Number)value).longValue():-1;
+                Diagnostics.event("external-result","position="+position+" result="+result);
+                if(position>=0 && !playingUri.isEmpty()) Library.position(this,playingUri,position);
+                if(position>=0) WatchState.save(this,playingMovie,playingEpisode,playingTorrent,playingFile,position);
                 if(position>=0 && currentMovie!=null && currentMovie.optString("id").equals(playingMovie)) currentMovie.put("position",position);
                 if(position>=0 && chosenFile!=null && chosenTorrent.equals(playingTorrent) && chosenFile.optInt("index")==playingFile) chosenFile.put("position",position);
                 if(position>=0 && prefs.getBoolean("external_player",false)) { String movie=playingMovie, episode=playingEpisode, torrent=playingTorrent; int file=playingFile; io.submit(()->{ try {
@@ -872,14 +1033,16 @@ public final class MainActivity extends Activity {
                     request("PUT","/v1/history/"+movie,update);
                 } catch(Exception ignored) { } }); }
             }
-            if(result!=RESULT_OK || data==null) return;
+            if(request==200) { stopService(new Intent(this,PlaybackService.class)); if(data==null) Diagnostics.event("player-result","no position returned"); }
+            if(result!=RESULT_OK || data==null) { if(request==104) pendingBatch.clear(); return; }
             if(request==100) { persist(data.getData(),data.getFlags()); startDownload(data.getData()); }
-            if(request==101 || request==103) {
+            if(request==101 || request==103 || request==104) {
                 Uri tree=data.getData(); persist(tree,data.getFlags());
-                if(request==101) prefs.edit().putString("folder",tree.toString()).apply();
+                if(request==101 || prefs.getString("folder","").isEmpty()) prefs.edit().putString("folder",tree.toString()).putBoolean("folder_prompted",true).apply();
                 page("restore","Сохранённое"); body.addView(text("Проверяем выбранную папку…",16,MUTED));
                 task(()->new JSONObject().put("restored",FolderLibrary.restore(this,tree)),restored->{
-                    if(request==103 && pendingDownload!=null) { pendingDownload.put("folder",tree.toString()); startDownload(FolderLibrary.create(this,tree,pendingDownload.getString("name"))); }
+                    if(request==104) startBatch(tree);
+                    else if(request==103 && pendingDownload!=null) { pendingDownload.put("folder",tree.toString()); startDownload(FolderLibrary.create(this,tree,pendingDownload.getString("name"))); }
                     else { settings(); Toast.makeText(this,"Добавлено файлов: "+restored.optInt("restored"),Toast.LENGTH_LONG).show(); }
                 });
             }
