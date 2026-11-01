@@ -33,6 +33,60 @@ public final class StreamInstrumentation extends Instrumentation {
         if(!denied || attempts[0]!=3) throw new AssertionError("Retry limit failed");
     }
     private Bundle arguments;
+    private void checkNavigation(Api api) throws Exception {
+        var context=getTargetContext();
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            waitForIdleSync();
+            runOnMainSync(()->{
+                var decor=activity.getWindow().getDecorView();
+                var settings=find(decor,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Настройки"));
+                var details=find(decor,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Подробнее"));
+                var search=find(decor,v->"Поиск фильма или сериала".contentEquals(v.getContentDescription()==null?"":v.getContentDescription()));
+                if(settings==null || details==null || search==null || settings.getWidth()!=details.getWidth() || settings.getWidth()!=search.getWidth()) throw new AssertionError("Home button widths");
+                search.performClick();
+            });
+            waitForIdleSync();
+            var rootField=MainActivity.class.getDeclaredField("root"); rootField.setAccessible(true);
+            var bodyField=MainActivity.class.getDeclaredField("body"); bodyField.setAccessible(true);
+            var searchRoot=(android.view.View)rootField.get(activity);
+            var scroll=(android.widget.ScrollView)find(searchRoot,v->v instanceof android.widget.ScrollView);
+            var input=(android.widget.EditText)find(searchRoot,v->v instanceof android.widget.EditText);
+            runOnMainSync(()->{ input.setText("MCore"); });
+            Thread.sleep(2000); waitForIdleSync();
+            runOnMainSync(()->{ try {
+                var body=(android.widget.LinearLayout)bodyField.get(activity);
+                for(int i=0;i<25;i++) { var row=new android.widget.TextView(activity); row.setText("Scroll fixture "+i); row.setHeight(100); body.addView(row); }
+            } catch(Exception e) { throw new RuntimeException(e); } });
+            waitForIdleSync(); runOnMainSync(()->scroll.scrollTo(0,500));
+            int position=scroll.getScrollY(); if(position==0) throw new AssertionError("Scroll fixture did not scroll");
+            var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies"); String mid="";
+            for(int i=0;i<movies.length();i++) if(movies.getJSONObject(i).optString("title").equals("MCore demo")) mid=movies.getJSONObject(i).getString("id");
+            if(mid.isEmpty()) throw new AssertionError("Missing demo"); String movieId=mid;
+            runOnMainSync(()->{ try { var method=MainActivity.class.getDeclaredMethod("movie",String.class); method.setAccessible(true); method.invoke(activity,movieId); } catch(Exception e) { throw new RuntimeException(e); } });
+            Thread.sleep(1500);
+            runOnMainSync(activity::onBackPressed); waitForIdleSync();
+            if(rootField.get(activity)!=searchRoot || scroll.getScrollY()!=position || !input.getText().toString().equals("MCore")) throw new AssertionError("Search state was not restored");
+            runOnMainSync(()->{ try { var method=MainActivity.class.getDeclaredMethod("movie",String.class); method.setAccessible(true); method.invoke(activity,movieId); } catch(Exception e) { throw new RuntimeException(e); } });
+            waitForIdleSync();
+            runOnMainSync(()->{
+                var back=find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Назад"));
+                if(back==null) throw new AssertionError("Missing toolbar Back");
+                back.performClick();
+            });
+            waitForIdleSync();
+            if(rootField.get(activity)!=searchRoot || scroll.getScrollY()!=position || !input.getText().toString().equals("MCore")) throw new AssertionError("Toolbar Back lost search state");
+            runOnMainSync(()->{ try { var method=MainActivity.class.getDeclaredMethod("settings"); method.setAccessible(true); method.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } });
+            waitForIdleSync();
+            runOnMainSync(()->{ try {
+                var body=(android.widget.LinearLayout)bodyField.get(activity); int count=0;
+                for(int i=0;i<body.getChildCount();i++) if(body.getChildAt(i) instanceof android.widget.Button && !(body.getChildAt(i) instanceof android.widget.CompoundButton)) {
+                    int width=body.getChildAt(i).getWidth(); if(width>=body.getWidth()) throw new AssertionError("Settings button is full width"); count++;
+                }
+                if(count==0) throw new AssertionError("No settings buttons");
+            } catch(RuntimeException e) { throw e; } catch(Exception e) { throw new RuntimeException(e); } });
+        } finally { runOnMainSync(activity::finish); }
+    }
     private void checkFeedback(Api api) throws Exception {
         var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0);
         var enabled=new java.util.concurrent.CountDownLatch(1);
@@ -293,6 +347,10 @@ public final class StreamInstrumentation extends Instrumentation {
             var context=getTargetContext();
             Api api=new Api(context);
             integrityChecks();
+            if(arguments!=null && arguments.containsKey("navigation")) {
+                checkNavigation(api); result.putString("stream","PASS: equal home buttons, golden-ratio settings buttons, search query/results/scroll restored after movie");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("feedback")) {
                 checkFeedback(api); result.putString("stream","PASS: shared-folder diagnostics, no credentials, deletion, home title and screenshot viewer");
                 finish(Activity.RESULT_OK,result); return;

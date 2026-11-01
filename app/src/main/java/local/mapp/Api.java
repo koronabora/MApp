@@ -14,6 +14,7 @@ final class Api {
     static final class Failure extends java.io.IOException {
         final int code;
         Failure(int code) { super(code==401?"Ссылка истекла или доступ отозван":"Ошибка MCore: "+code); this.code=code; }
+        Failure(int code,String message) { super(message); this.code=code; }
     }
     final String server, pin, key;
     final SSLSocketFactory sockets;
@@ -58,7 +59,19 @@ final class Api {
             }
             int code = c.getResponseCode();
             Diagnostics.event("api",method+" "+path.split("\\?",2)[0]+" status="+code+" ms="+(System.currentTimeMillis()-started));
-            if(code<200 || code>=300) throw new Failure(code);
+            if(code<200 || code>=300) {
+                try(var input=c.getErrorStream()) {
+                    if(input!=null) {
+                        JSONObject error=new JSONObject(new String(read(input,16384),StandardCharsets.UTF_8));
+                        JSONObject detail=error.optJSONObject("detail");
+                        if(detail!=null && detail.optString("code").matches("source_missing|tracker_unavailable|torrent_invalid")) {
+                            Diagnostics.event("api-detail",detail.optString("code"));
+                            throw new Failure(code,detail.optString("message","Ошибка MCore: "+code));
+                        }
+                    }
+                } catch(Failure failure) { throw failure; } catch(Exception ignored) { }
+                throw new Failure(code);
+            }
             try(InputStream in=c.getInputStream()) { return new JSONObject(new String(read(in,16*1024*1024), StandardCharsets.UTF_8)); }
         } catch(Exception e) { Diagnostics.event("api-error",e.getClass().getSimpleName()); throw e; }
         finally { c.disconnect(); }

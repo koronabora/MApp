@@ -39,6 +39,8 @@ public final class MainActivity extends Activity {
     private int playingFile;
     private SharedPreferences prefs;
     private Dialog screenshotDialog;
+    private LinearLayout searchReturnRoot, searchReturnBody;
+    private boolean sourceLoading;
     interface Job { JSONObject run() throws Exception; }
     interface Result { void accept(JSONObject data) throws Exception; }
 
@@ -91,13 +93,15 @@ public final class MainActivity extends Activity {
         LinearLayout bar=new LinearLayout(this); bar.setGravity(Gravity.CENTER_VERTICAL);
         TextView heading=text(title,28,TEXT); heading.setTypeface(null,Typeface.BOLD);
         bar.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
-        bar.addView(button(name.equals("home")?"Настройки":"Назад",()->{ if(name.equals("home")) settings(); else home(); })); root.addView(bar);
+        Button navigation=button(name.equals("home")?"Настройки":"Назад",()->{ if(name.equals("home")) settings(); else back(); });
+        bar.addView(navigation,new LinearLayout.LayoutParams(name.equals("home")?homeButtonWidth():-2,-2)); root.addView(bar);
         ScrollView scroll=new ScrollView(this); scroll.setFillViewport(true);
         body=new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(body); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1)); setContentView(root);
     }
     private void section(String name) { TextView h=text(name,21,TEXT); h.setTypeface(null,Typeface.BOLD); body.addView(h); }
-    private void divider() { View v=new View(this); v.setBackgroundColor(0xffd7e2db); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(1)); p.setMargins(0,dp(22),0,dp(16)); body.addView(v,p); }
+    private void divider() { View v=new View(this); v.setBackgroundColor(0xffd7e2db); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(screen.equals("home")?2:1)); p.setMargins(0,dp(22),0,dp(16)); body.addView(v,p); }
+    private int homeButtonWidth() { return Math.min(dp(124),(getResources().getDisplayMetrics().widthPixels-dp(44))/2); }
     private void notice(String message) { new AlertDialog.Builder(this).setMessage(message).setPositiveButton("Понятно",null).show(); }
     private void resetBusy(View view) {
         if(view instanceof Button && Boolean.TRUE.equals(view.getTag())) { view.setTag(null); view.setEnabled(true); ((Button)view).setText("Повторить"); }
@@ -121,15 +125,18 @@ public final class MainActivity extends Activity {
         },result->home());
     }
     private void home() {
+        searchReturnRoot=null; searchReturnBody=null;
         page("home","Кинозал");
         try { if(Vault.load(this).optString("key").isEmpty()) { welcome(); return; } } catch(Exception e) { welcome(); return; }
-        section("История просмотра"); LinearLayout history=new LinearLayout(this); body.addView(history);
+        divider(); section("История просмотра"); LinearLayout history=new LinearLayout(this); body.addView(history);
         history.addView(text("Загружаем историю…",15,MUTED)); divider();
-        section("Поиск"); ImageButton search=new ImageButton(this); search.setImageResource(R.drawable.search); search.setImageTintList(android.content.res.ColorStateList.valueOf(contrast(BUTTON))); search.setBackground(rounded(BUTTON)); search.setContentDescription("Поиск фильма или сериала"); search.setOnClickListener(v->searchPage("")); body.addView(search,new LinearLayout.LayoutParams(dp(64),dp(56)));
+        LinearLayout searchHeader=new LinearLayout(this); searchHeader.setGravity(Gravity.CENTER_VERTICAL);
+        TextView searchTitle=text("Поиск",21,TEXT); searchTitle.setTypeface(null,Typeface.BOLD); searchHeader.addView(searchTitle,new LinearLayout.LayoutParams(0,-2,1));
+        ImageButton search=new ImageButton(this); search.setImageResource(R.drawable.search); search.setImageTintList(android.content.res.ColorStateList.valueOf(contrast(BUTTON))); search.setBackground(rounded(BUTTON)); search.setContentDescription("Поиск фильма или сериала"); search.setOnClickListener(v->searchPage("")); searchHeader.addView(search,new LinearLayout.LayoutParams(homeButtonWidth(),dp(56))); body.addView(searchHeader);
         LinearLayout recent=new LinearLayout(this); recent.setOrientation(LinearLayout.VERTICAL); body.addView(recent); divider();
         LinearLayout savedHeader=new LinearLayout(this); savedHeader.setGravity(Gravity.CENTER_VERTICAL);
-        TextView savedTitle=text("Сохранённое",21,TEXT); savedTitle.setTypeface(null,Typeface.BOLD);
-        savedHeader.addView(savedTitle,new LinearLayout.LayoutParams(0,-2,1)); savedHeader.addView(button("Подробнее →",this::library)); body.addView(savedHeader); strip(body,Library.grouped(this),true);
+        TextView savedTitle=text("Скачанное",21,TEXT); savedTitle.setTypeface(null,Typeface.BOLD);
+        savedHeader.addView(savedTitle,new LinearLayout.LayoutParams(0,-2,1)); savedHeader.addView(button("Подробнее",this::library),new LinearLayout.LayoutParams(homeButtonWidth(),-2)); body.addView(savedHeader); strip(body,Library.grouped(this),true);
         task(()->request("GET","/v1/home",null),data->{
             history.removeAllViews(); strip(history,data.getJSONArray("history"),false);
             JSONArray visits=new JSONArray(prefs.getString(visitKey(),"[]"));
@@ -163,17 +170,23 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,dp(112)); spacing.topMargin=dp(16); target.addView(scroll,spacing);
     }
     private void searchPage(String initial) {
+        searchReturnRoot=null; searchReturnBody=null;
         page("search","Поиск"); EditText input=new EditText(this); input.setTextColor(TEXT); input.setHintTextColor(MUTED); input.setSingleLine(true); input.setHint("Фильм или сериал"); input.setImeOptions(EditorInfo.IME_ACTION_SEARCH); body.addView(input);
+        LinearLayout searchRoot=root;
+        GradientDrawable border=rounded(BG); border.setStroke(dp(1),MUTED); input.setBackground(border); input.setPadding(dp(14),dp(12),dp(14),dp(12));
+        LinearLayout.LayoutParams inputParams=new LinearLayout.LayoutParams(-1,dp(56)); inputParams.setMargins(0,dp(16),0,dp(16)); input.setLayoutParams(inputParams);
         TextView status=text("Введите название — ищем и точные, и похожие совпадения",14,MUTED); body.addView(status);
         LinearLayout results=new LinearLayout(this); results.setOrientation(LinearLayout.VERTICAL); body.addView(results);
         LinearLayout recent=new LinearLayout(this); recent.setOrientation(LinearLayout.VERTICAL); body.addView(recent);
         task(()->request("GET","/v1/home",null),data->{
+            View line=new View(this); line.setBackgroundColor(0xffd7e2db); LinearLayout.LayoutParams lineParams=new LinearLayout.LayoutParams(-1,dp(1)); lineParams.setMargins(0,dp(16),0,dp(8)); recent.addView(line,lineParams);
             recent.addView(text("История поиска",18,TEXT)); JSONArray queries=data.getJSONArray("queries");
-            for(int i=0;i<queries.length();i++) { String q=queries.getString(i); recent.addView(button(q,()->searchPage(q))); }
+            for(int i=0;i<queries.length();i++) { String q=queries.getString(i); TextView row=text(q,16,MUTED); row.setMinHeight(dp(48)); row.setOnClickListener(v->searchPage(q)); recent.addView(row); }
             recent.setVisibility(input.length()==0?View.VISIBLE:View.GONE);
         });
         Runnable[] pending={null}; int[] sequence={0};
         java.util.function.Consumer<Boolean> find=live->{
+            if(root!=searchRoot || !screen.equals("search")) return;
             String q=input.getText().toString().trim(); if(q.length()<2) return;
             int n=++sequence[0]; status.setText(live?"Ищем на сервере…":"Подсказки из индекса…");
             task(()->request("GET","/v1/search?q="+Uri.encode(q)+"&live="+live,null),data->{
@@ -184,7 +197,7 @@ public final class MainActivity extends Activity {
                 boolean approximate=false;
                 for(int i=0;i<movies.length();i++) {
                     JSONObject item=movies.getJSONObject(i);
-                    if(!item.optBoolean("exact") && !approximate) {
+                    if(!item.optBoolean("exact") && !item.optBoolean("keyword_match") && !approximate) {
                         approximate=true; View line=new View(this); line.setBackgroundColor(0xffc8bdb5); results.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));
                         results.addView(text("Похожие названия",16,MUTED));
                     }
@@ -198,7 +211,7 @@ public final class MainActivity extends Activity {
             public void afterTextChanged(Editable s) { }
         });
         input.setOnEditorActionListener((v,id,event)->{ if(id==EditorInfo.IME_ACTION_SEARCH) { find.accept(true); return true; } return false; });
-        body.addView(button("Искать на всех трекерах",()->find.accept(true)),2);
+        body.addView(button("Искать",()->find.accept(true)),2);
         input.setText(initial); if(!initial.isEmpty()) { if(pending[0]!=null) ui.removeCallbacks(pending[0]); find.accept(true); }
     }
     private View movieRow(JSONObject item,Runnable click) {
@@ -231,6 +244,7 @@ public final class MainActivity extends Activity {
         } catch(Exception e) { error(e); }
     }
     private void movie(String id) {
+        if(screen.equals("search")) { searchReturnRoot=root; searchReturnBody=body; }
         preferredRelease="";
         page("movie","Карточка фильма"); body.addView(text("Обновляем раздачи и доступность источников…",16,MUTED));
         task(()->request("GET","/v1/movies/"+id,null),this::showMovie);
@@ -355,8 +369,9 @@ public final class MainActivity extends Activity {
                 JSONObject r=releases.optJSONObject(position); int seeds=r.optInt("seeds");
                 if(chosenFile!=null) preferredEpisode=chosenFile.optString("episode");
                 chosenFile=null; chosenTorrent=""; selectedEpisode="";
+                sourceLoading=true;
                 int selection=++sourceSelection;
-                episodePanel.removeAllViews();
+                episodePanel.removeAllViews(); episodePanel.addView(text("Получаем список файлов раздачи…",14,MUTED));
                 loadSource(r,"",episodePanel,audio,selection,System.currentTimeMillis());
                 health.setText(r.optString("release_title")+(r.optBoolean("swarm_stale")?"\nНе удалось обновить число раздающих. Показаны сохранённые данные.":""));
                 audio.setText(r.optString("audio").isEmpty()?"Дорожки и субтитры доступны в меню плеера":r.optString("audio"));
@@ -372,6 +387,7 @@ public final class MainActivity extends Activity {
         final int initialSelection=selected;
         Button watch=button(data.optLong("position")>0?"Продолжить просмотр":"Смотреть",()->{});
         View.OnClickListener streamWatch=v->{
+            if(sourceLoading) return;
             watch.setTag(Boolean.TRUE);
             if(chosenFile!=null) {
                 selectedRelease=releases.optJSONObject(spinner.getSelectedItemPosition()).optString("id");
@@ -396,6 +412,7 @@ public final class MainActivity extends Activity {
         }; watch.setOnClickListener(streamWatch); body.addView(watch);
         Button download=button("Скачать на телефон",()->{});
         download.setOnClickListener(v->{
+            if(sourceLoading) return;
             if(chosenFile!=null) { selectedRelease=releases.optJSONObject(spinner.getSelectedItemPosition()).optString("id"); selectedSeries=releases.optJSONObject(spinner.getSelectedItemPosition()).optBoolean("series"); saveFile(chosenTorrent,chosenFile); }
             else prepare(releases.optJSONObject(spinner.getSelectedItemPosition()),true,download);
         }); body.addView(download);
@@ -438,6 +455,10 @@ public final class MainActivity extends Activity {
                     });
                 }
             }
+            if(sourceLoading && chosenFile==null && existing==null) {
+                watch.setEnabled(false); watch.setText("Ожидаем список файлов…");
+                download.setEnabled(false); download.setText("Получаем раздачу…");
+            }
             ui.postDelayed(this,1500);
         }};
         refreshDownloads.run();
@@ -453,9 +474,13 @@ public final class MainActivity extends Activity {
                     if(version!=generation || selection!=sourceSelection) return;
                     JSONArray files=status.optJSONArray("files");
                     if(files==null || files.length()==0) {
+                        if(!status.isNull("error") && !status.optString("error").isEmpty()) { sourceLoading=false; panel.removeAllViews(); panel.addView(text(status.optString("error"),14,MUTED)); return; }
+                        panel.removeAllViews(); panel.addView(text("Ожидаем метаданные от пиров • пиров: "+status.optInt("peers")+" • "+(System.currentTimeMillis()-started)/1000+" с",14,MUTED));
                         if(System.currentTimeMillis()-started<120000) ui.postDelayed(()->{ if(version==generation && selection==sourceSelection) loadSource(release,key,panel,audio,selection,started); },2000);
+                        else { sourceLoading=false; panel.addView(text("Пиры пока не передали список файлов. Попробуйте другую раздачу или повторите позже.",14,MUTED)); }
                         return;
                     }
+                    sourceLoading=false;
                     chosenTorrent=key;
                     ArrayList<JSONObject> ordered=new ArrayList<>(); for(int i=0;i<files.length();i++) ordered.add(files.optJSONObject(i));
                     ordered.sort(Comparator.comparingInt((JSONObject f)->f.optInt("season",0)).thenComparingInt(f->f.optInt("number",Integer.MAX_VALUE)).thenComparing(f->f.optString("name")));
@@ -485,7 +510,10 @@ public final class MainActivity extends Activity {
                     }
                     choose.accept(ordered.get(selected));
                 });
-            } catch(Exception ignored) { /* Offline cards remain usable from the saved library. */ }
+            } catch(Exception e) {
+                Diagnostics.event("source-error",e.getClass().getSimpleName());
+                ui.post(()->{ if(version==generation && selection==sourceSelection) { sourceLoading=false; panel.removeAllViews(); panel.addView(text(e.getMessage()==null?"Раздача сейчас недоступна":e.getMessage(),14,MUTED)); } });
+            }
         });
     }
     private void showMediaInfo(String key,JSONObject file,TextView audio,int selection,int attempt) {
@@ -561,6 +589,7 @@ public final class MainActivity extends Activity {
     private void chooseFile(String torrent,boolean download,Button button,long started) {
         task(()->request("GET","/v1/torrents/"+torrent,null),status->{
             JSONArray files=status.getJSONArray("files");
+            if(!status.isNull("error") && !status.optString("error").isEmpty()) throw new java.io.IOException(status.optString("error"));
             if(files.length()==0) {
                 if(System.currentTimeMillis()-started>120000) { button.setTag(null); button.setEnabled(true); button.setText("Повторить"); notice("Метаданные пока недоступны. Возможно, нет доступных пиров."); return; }
                 button.setText("Ожидаем метаданные…"); int version=generation;
@@ -782,6 +811,13 @@ public final class MainActivity extends Activity {
         try { body.addView(text("MApp "+getPackageManager().getPackageInfo(getPackageName(),0).versionName,13,MUTED)); } catch(Exception ignored) { }
         divider(); section("Каталог сервера"); TextView sync=text("Получаем состояние синхронизации…",14,MUTED); body.addView(sync);
         syncProgress(sync,generation);
+        body.post(()->{
+            if(!screen.equals("settings")) return;
+            int width=Math.min(getResources().getDisplayMetrics().widthPixels-dp(44),(int)(getResources().getDisplayMetrics().widthPixels/1.618));
+            for(int i=0;i<body.getChildCount();i++) if(body.getChildAt(i) instanceof Button && !(body.getChildAt(i) instanceof CompoundButton)) {
+                View control=body.getChildAt(i); LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(width,-2); params.gravity=Gravity.CENTER_HORIZONTAL; control.setLayoutParams(params);
+            }
+        });
     }
     private void syncProgress(TextView label,int version) {
         io.submit(()->{ try {
@@ -851,8 +887,19 @@ public final class MainActivity extends Activity {
     }
     private void persist(Uri uri,int flags) { getContentResolver().takePersistableUriPermission(uri,flags&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION)); }
     @Override public void onBackPressed() {
-        if(!screen.equals("home")) { home(); return; }
+        if(!screen.equals("home")) { back(); return; }
         new AlertDialog.Builder(this).setTitle("Выйти из MApp?").setPositiveButton("Выйти",(d,n)->finish()).setNegativeButton("Остаться",null).show();
+    }
+    private void back() {
+        if(screen.equals("movie") && searchReturnRoot!=null) {
+            generation++; root=searchReturnRoot; body=searchReturnBody; screen="search"; setContentView(root);
+            reloadImages(root); return;
+        }
+        home();
+    }
+    private void reloadImages(View view) {
+        if(view instanceof ImageView image && image.getTag() instanceof String path && path.startsWith("/v1/")) loadImage(image,path);
+        if(view instanceof android.view.ViewGroup group) for(int i=0;i<group.getChildCount();i++) reloadImages(group.getChildAt(i));
     }
     @Override protected void onDestroy() { if(screenshotDialog!=null) screenshotDialog.dismiss(); generation++; ui.removeCallbacksAndMessages(null); io.shutdown(); images.shutdownNow(); super.onDestroy(); }
 }
