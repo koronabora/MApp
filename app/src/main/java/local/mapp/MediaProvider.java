@@ -30,14 +30,24 @@ public final class MediaProvider extends ContentProvider {
         return Uri.parse("content://local.mapp.media/"+id);
     }
     private JSONObject item(Uri uri) throws Exception {
-        String raw=getContext().getSharedPreferences("streams",0).getString(uri.getLastPathSegment(),null);
+        return describe(getContext(),uri);
+    }
+    static JSONObject describe(Context context,Uri uri) throws Exception {
+        String raw=context.getSharedPreferences("streams",0).getString(uri.getLastPathSegment(),null);
         if(raw==null) throw new FileNotFoundException();
         JSONObject item=new JSONObject(raw);
-        if(item.getLong("expires")<System.currentTimeMillis() || !item.getString("server").equals(Vault.load(getContext()).optString("server"))) throw new FileNotFoundException();
+        if(item.getLong("expires")<System.currentTimeMillis() || !item.getString("server").equals(Vault.load(context).optString("server"))) throw new FileNotFoundException();
         return item;
     }
     @Override public boolean onCreate() { return true; }
-    @Override public String getType(Uri uri) { return "video/*"; }
+    @Override public String getType(Uri uri) {
+        try {
+            String name=item(uri).getString("name"); int dot=name.lastIndexOf('.');
+            String type=dot<0?null:android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substring(dot+1).toLowerCase(java.util.Locale.ROOT));
+            if(type!=null) return type;
+        } catch(Exception ignored) { }
+        return "video/*";
+    }
     @Override public Cursor query(Uri uri,String[] projection,String selection,String[] args,String sort) {
         try {
             JSONObject i=item(uri);
@@ -55,6 +65,7 @@ public final class MediaProvider extends ContentProvider {
             HandlerThread thread=new HandlerThread("MApp media"); thread.start();
             return getContext().getSystemService(StorageManager.class).openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY,new ProxyFileDescriptorCallback() {
                 byte[] cache=new byte[0]; long cacheStart=-1;
+                final java.util.LinkedHashMap<Long,byte[]> blocks=new java.util.LinkedHashMap<>(8,.75f,true);
                 @Override public long onGetSize() { return length; }
                 @Override public int onRead(long offset,int size,byte[] data) throws ErrnoException {
                     if(offset>=length) return 0;
@@ -64,14 +75,19 @@ public final class MediaProvider extends ContentProvider {
                         while(copied<wanted) {
                             long cursor=offset+copied;
                             if(cursor<cacheStart || cursor>=cacheStart+cache.length) {
+                                long block=cursor/(512*1024)*(512*1024);
+                                byte[] stored=blocks.get(block);
+                                if(stored!=null) { cache=stored; cacheStart=block; continue; }
                                 HttpsURLConnection c=api.open(item.getString("path"));
-                                long end=Math.min(length-1,cursor+1024*1024-1);
-                                c.setRequestProperty("Range","bytes="+cursor+"-"+end);
+                                long end=Math.min(length-1,block+512*1024-1);
+                                c.setRequestProperty("Range","bytes="+block+"-"+end);
+                                c.setRequestProperty("Accept-Encoding","identity");
                                 try {
                                     if(c.getResponseCode()!=206) throw new IOException("Range request failed");
                                     try(InputStream in=c.getInputStream()) { cache=Api.read(in,1024*1024); }
-                                    if(cache.length!=end-cursor+1) throw new IOException("Incomplete range");
-                                    cacheStart=cursor;
+                                    if(cache.length!=end-block+1 || !("bytes "+block+"-"+end+"/"+length).equals(c.getHeaderField("Content-Range"))) throw new IOException("Incorrect range");
+                                    cacheStart=block; blocks.put(block,cache);
+                                    if(blocks.size()>8) blocks.remove(blocks.keySet().iterator().next());
                                 } finally { c.disconnect(); }
                             }
                             int count=(int)Math.min(wanted-copied,cacheStart+cache.length-cursor);
