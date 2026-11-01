@@ -1,6 +1,26 @@
 # MApp
 
-Android-клиент сервера **MCore**, версия **0.2.0** (`versionCode=4`). Android 10+; arm64 и x86_64.
+Android-клиент сервера **MCore**, версия **0.2.1** (`versionCode=5`). Android 10+; arm64 и x86_64.
+
+## Обновление 0.2.1
+
+- Настройка «Спрашивать аудиодорожку при новом просмотре»: встроенный плеер
+  приостанавливается после определения дорожек, предлагает выбор при наличии
+  нескольких, сохраняет выбор. При продолжении вопрос не появляется.
+  Внешние плееры используют собственное меню аудио.
+- Уменьшен блок предварительного чтения LibVLC с 16 МиБ до 64 КиБ,
+  внутренний буфер — до 1 МиБ: большой запрос больше не пересекает значительную
+  недоступную часть торрента во время ранней перемотки.
+- В карточке автоматически обновляются проценты; повторное скачивание готового
+  или скачиваемого отдельного фильма недоступно. Готовый фильм можно смотреть
+  локально основной кнопкой. Для загружаемого фильма проверяется серверный буфер,
+  до его готовности просмотр скрыт, рядом с прогрессом показывается оценка ожидания.
+- В сгруппированной библиотеке загрузки сверху, готовое — по алфавиту.
+  В строке есть удаление с подтверждением количества файлов.
+- Карточка использует обновлённые при открытии счётчики источников;
+  устаревшие данные отмечаются, если источник не ответил или не вернул раздачу.
+
+Сверка полного ТЗ и дальнейшие этапы: `MCore/docs/requirements-status.md`.
 
 ## Обновление 0.2.0
 
@@ -173,6 +193,7 @@ adb install -r app/build/outputs/apk/androidTest/release/app-release-androidTest
 adb shell am instrument -w local.mapp.test/local.mapp.StreamInstrumentation
 # После установки tests/incomplete_demo.py на сервере:
 adb shell am instrument -w -e player local:2 local.mapp.test/local.mapp.StreamInstrumentation
+adb shell am instrument -w -e player local:2 -e audio 1 local.mapp.test/local.mapp.StreamInstrumentation
 # После выбора тестовой SAF-папки в настройках:
 adb shell am instrument -w -e library 1 local.mapp.test/local.mapp.StreamInstrumentation
 adb shell am instrument -w -e card 1 local.mapp.test/local.mapp.StreamInstrumentation

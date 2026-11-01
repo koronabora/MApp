@@ -34,6 +34,9 @@ final class Library {
             JSONObject prior=groups.get(group);
             if(prior==null || (!item.optString("state").equals("complete") && prior.optString("state").equals("complete"))) groups.put(group,item);
         }
-        JSONArray result=new JSONArray(); for(JSONObject item:groups.values()) result.put(item); return result;
+        java.util.ArrayList<JSONObject> sorted=new java.util.ArrayList<>(groups.values());
+        sorted.sort(java.util.Comparator.comparing((JSONObject item)->item.optString("state").equals("complete"))
+            .thenComparing(item->item.optString("title"),java.text.Collator.getInstance(new java.util.Locale("ru"))));
+        JSONArray result=new JSONArray(); for(JSONObject item:sorted) result.put(item); return result;
     }
 }

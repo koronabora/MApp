@@ -41,7 +41,7 @@ public final class StreamInstrumentation extends Instrumentation {
     private void checkCard(Api api) throws Exception {
         var context=getTargetContext(); String folder=context.getSharedPreferences("settings",0).getString("folder","");
         var tree=android.net.Uri.parse(folder); var uri=FolderLibrary.create(context,tree,"MApp-card-test-"+java.util.UUID.randomUUID()+".mp4");
-        JSONObject item=new JSONObject().put("id",java.util.UUID.randomUUID().toString()).put("movie","card-test").put("release","local:8").put("uri",uri.toString()).put("server",api.server).put("state","downloading");
+        JSONObject item=new JSONObject().put("id",java.util.UUID.randomUUID().toString()).put("movie","card-test").put("release","local:8").put("uri",uri.toString()).put("server",api.server).put("state","downloading").put("size",100).put("downloaded",25);
         JSONObject data=new JSONObject().put("id","card-test").put("title","Card fixture").put("description","Offline card fixture").put("releases",new org.json.JSONArray()
             .put(new JSONObject().put("id","local:7").put("resolution","1080p").put("size","1 MiB").put("seeds",10))
             .put(new JSONObject().put("id","local:8").put("resolution","720p").put("size","1 MiB").put("seeds",5)));
@@ -60,6 +60,21 @@ public final class StreamInstrumentation extends Instrumentation {
                 if(spinner.getSelectedItemPosition()!=1 || open==null || !open.isEnabled()) throw new AssertionError("Downloading release not selected or saved access disabled");
                 var hint=(android.widget.TextView)find(root,v->v instanceof android.widget.TextView && ((android.widget.TextView)v).getText().toString().contains("Дорожки и субтитры"));
                 if(hint==null || hint.getGravity()!=android.view.Gravity.CENTER) throw new AssertionError("Track hint not centered");
+                var download=(android.widget.Button)find(root,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().contains("25 %"));
+                if(download==null || download.isEnabled()) throw new AssertionError("Duplicate download enabled or progress missing");
+            });
+            item.put("state","complete"); Library.put(context,item); Thread.sleep(1800); waitForIdleSync();
+            runOnMainSync(()->{
+                var root=activity.getWindow().getDecorView();
+                var download=(android.widget.Button)find(root,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Скачано"));
+                if(download==null || download.isEnabled()) throw new AssertionError("Completed download not disabled");
+                if(find(root,v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Смотреть сохранённое"))==null) throw new AssertionError("Local playback action missing");
+                var spinner=(android.widget.Spinner)find(root,v->v instanceof android.widget.Spinner); spinner.setSelection(0);
+            });
+            Thread.sleep(1800); waitForIdleSync();
+            runOnMainSync(()->{
+                var download=(android.widget.Button)find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Скачать на телефон"));
+                if(download==null || !download.isEnabled()) throw new AssertionError("Other release download blocked");
             });
             android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),uri);
             Thread.sleep(2500); waitForIdleSync();
@@ -117,6 +132,17 @@ public final class StreamInstrumentation extends Instrumentation {
             item=waitDownload(item.getString("id"));
             try(var input=context.getContentResolver().openInputStream(android.net.Uri.parse(item.getString("uri")))) { if(!Arrays.equals(Api.read(input,32*1024*1024),expected)) throw new AssertionError("Resumed download differs"); }
             if(!FolderLibrary.fromName("Example.S01E01.mkv",1).getString("movie").equals(FolderLibrary.fromName("Example.S02E01.mkv",1).getString("movie"))) throw new AssertionError("Recovered series not grouped");
+            String beforeSorting=Library.all(context).toString();
+            try {
+                var records=new org.json.JSONArray()
+                    .put(new JSONObject().put("id","1").put("movie","b").put("title","Бета").put("state","complete"))
+                    .put(new JSONObject().put("id","2").put("movie","a").put("title","Альфа").put("state","complete"))
+                    .put(new JSONObject().put("id","3").put("movie","z").put("title","Янтарь").put("state","complete"))
+                    .put(new JSONObject().put("id","4").put("movie","z").put("title","Янтарь").put("state","downloading"));
+                context.getSharedPreferences("library",0).edit().putString("items",records.toString()).commit();
+                var grouped=Library.grouped(context);
+                if(grouped.length()!=3 || !grouped.optJSONObject(0).optString("id").equals("4") || !grouped.optJSONObject(1).optString("title").equals("Альфа") || !grouped.optJSONObject(2).optString("title").equals("Бета")) throw new AssertionError("Grouped library ordering incorrect");
+            } finally { context.getSharedPreferences("library",0).edit().putString("items",beforeSorting).commit(); }
         } finally {
             if(item!=null) {
                 String id=item.optString("id"); if(DownloadService.queued.contains(id)) DownloadService.cancelled.add(id);
@@ -137,10 +163,22 @@ public final class StreamInstrumentation extends Instrumentation {
         if(release.equals("local:2") && state.optDouble("progress")>=1) throw new AssertionError("Fixture must be incomplete");
         JSONObject file=state.getJSONArray("files").getJSONObject(0);
         var uri=MediaProvider.create(context,"/v1/torrents/"+key+"/files/"+file.getInt("index"),file.getLong("size"),file.getString("name"));
-        var activity=(PlayerActivity)startActivitySync(new android.content.Intent(context,PlayerActivity.class).setData(uri).putExtra("position",2000L).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        boolean prompt=arguments.containsKey("audio"), oldAsk=context.getSharedPreferences("settings",0).getBoolean("ask_audio",false);
+        context.getSharedPreferences("settings",0).edit().putBoolean("ask_audio",prompt).commit();
+        var activity=(PlayerActivity)startActivitySync(new android.content.Intent(context,PlayerActivity.class).setData(uri).putExtra("position",prompt?0L:2000L).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
             var field=PlayerActivity.class.getDeclaredField("player"); field.setAccessible(true);
             var player=(org.videolan.libvlc.MediaPlayer)field.get(activity);
+            if(prompt) {
+                var dialogField=PlayerActivity.class.getDeclaredField("audioDialog"); dialogField.setAccessible(true);
+                deadline=System.currentTimeMillis()+30000;
+                while(dialogField.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
+                var dialog=(android.app.AlertDialog)dialogField.get(activity);
+                if(dialog==null) throw new AssertionError("Audio prompt did not appear");
+                Thread.sleep(500);
+                if(player.isPlaying()) throw new AssertionError("Playback not paused for audio choice");
+                runOnMainSync(()->{ var list=dialog.getListView(); list.performItemClick(list.getChildAt(1),1,list.getAdapter().getItemId(1)); });
+            }
             deadline=System.currentTimeMillis()+60000;
             while(player.getTime()<4000 && System.currentTimeMillis()<deadline) Thread.sleep(250);
             if(player.getTime()<4000 || player.getAudioTracksCount()<1 || player.getVideoTracksCount()<1) throw new AssertionError("Decoder did not play");
@@ -154,11 +192,11 @@ public final class StreamInstrumentation extends Instrumentation {
                 if(player.getTime()>=target+700 && stats!=null && stats.displayedPictures>displayed+2) { tailPlayed=true; break; }
                 Thread.sleep(250);
             }
-            if(!tailPlayed) throw new AssertionError("Seek did not display tail frames");
+            if(!tailPlayed) throw new AssertionError("Seek did not display tail frames: position="+player.getTime()+" target="+target+" frames="+(stats==null?-1:stats.displayedPictures)+" before="+displayed+" playing="+player.isPlaying());
             var audio=player.getAudioTracks();
             if(audio!=null && audio.length>1) { int track=audio[audio.length-1].id; runOnMainSync(()->player.setAudioTrack(track)); Thread.sleep(250); if(player.getAudioTrack()!=track) throw new AssertionError("Audio selection failed"); }
             if(release.equals("local:2") && api.request("GET","/v1/torrents/"+key,null).optDouble("progress")>=1) throw new AssertionError("Incomplete playback was not exercised");
-        } finally { runOnMainSync(activity::finish); }
+        } finally { context.getSharedPreferences("settings",0).edit().putBoolean("ask_audio",oldAsk).commit(); runOnMainSync(activity::finish); }
     }
     @Override public void onCreate(Bundle args) { arguments=args; super.onCreate(args); start(); }
     @Override public void onStart() {
