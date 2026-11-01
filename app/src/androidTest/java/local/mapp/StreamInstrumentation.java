@@ -39,7 +39,18 @@ public final class StreamInstrumentation extends Instrumentation {
                 while(seek.hasRemaining()) if(input.getChannel().read(seek)<0) throw new AssertionError("Unexpected EOF during seek");
                 if(!Arrays.equals(seek.array(),Arrays.copyOfRange(expected,1024*1024-13,1024*1024-13+8192))) throw new AssertionError("Random seek mismatch");
             }
-            result.putString("stream","PASS: invalid pin rejected; full ContentProvider SHA-256 and cross-buffer seek match HTTPS bytes");
+            JSONObject session=Vault.load(context);
+            String library=Library.all(context).toString();
+            try {
+                Vault.clear(context);
+                if(!Vault.load(context).optString("key").isEmpty() || !Vault.sessionIdentity(context).isEmpty()) throw new AssertionError("Logout retained credentials");
+                boolean denied=false;
+                try(var stale=context.getContentResolver().openFileDescriptor(uri,"r")) { }
+                catch(java.io.FileNotFoundException expectedError) { denied=true; }
+                if(!denied) throw new AssertionError("Old stream survived logout");
+                if(!Library.all(context).toString().equals(library)) throw new AssertionError("Logout changed saved library");
+            } finally { Vault.save(context,session); }
+            result.putString("stream","PASS: TLS pin, full stream checksum, seeking; logout clears credentials and stream access, preserves library");
             finish(Activity.RESULT_OK,result);
         } catch(Throwable e) {
             result.putString("stream","FAIL: "+e); finish(Activity.RESULT_CANCELED,result);

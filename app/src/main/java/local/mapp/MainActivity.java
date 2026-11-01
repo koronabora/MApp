@@ -17,7 +17,7 @@ import java.util.concurrent.*;
 import org.json.*;
 
 public final class MainActivity extends Activity {
-    private static final int BG=0xff101719, CARD=0xff1c272b, TEXT=0xffedf4f1, MUTED=0xffa1b4b2, ACCENT=0xff9de1ce;
+    private static final int BG=0xfff5f8f6, CARD=0xffffffff, TEXT=0xff182b25, MUTED=0xff596d65, ACCENT=0xff176b58;
     private final ExecutorService io=Executors.newFixedThreadPool(4);
     private final Handler ui=new Handler(Looper.getMainLooper());
     private LinearLayout root, body;
@@ -52,7 +52,14 @@ public final class MainActivity extends Activity {
     }
     private Button button(String title,Runnable click) {
         Button b=new Button(this); b.setText(title); b.setAllCaps(false); b.setTextColor(ACCENT);
-        b.setBackgroundTintList(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{0xff303b3d,CARD}));
+        b.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{MUTED,ACCENT}));
+        android.graphics.drawable.StateListDrawable states=new android.graphics.drawable.StateListDrawable();
+        states.addState(new int[]{-android.R.attr.state_enabled},rounded(0xffe9eeeb));
+        states.addState(new int[]{},rounded(0xffdeeee5));
+        var ripple=new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x25176b58),states,rounded(Color.WHITE));
+        b.setBackgroundTintList(null);
+        b.setBackground(new android.graphics.drawable.InsetDrawable(ripple,0,dp(4),0,dp(4)));
+        b.setMinHeight(dp(56)); b.setMinimumHeight(dp(56)); b.setPadding(dp(16),dp(8),dp(16),dp(8));
         b.setOnClickListener(v->click.run()); return b;
     }
     private void page(String name,String title) {
@@ -75,7 +82,7 @@ public final class MainActivity extends Activity {
         scroll.addView(body); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1)); setContentView(root);
     }
     private void section(String name) { TextView h=text(name,21,TEXT); h.setTypeface(null,Typeface.BOLD); body.addView(h); }
-    private void divider() { View v=new View(this); v.setBackgroundColor(0xff304044); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(1)); p.setMargins(0,dp(22),0,dp(16)); body.addView(v,p); }
+    private void divider() { View v=new View(this); v.setBackgroundColor(0xffd7e2db); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(1)); p.setMargins(0,dp(22),0,dp(16)); body.addView(v,p); }
     private void notice(String message) { new AlertDialog.Builder(this).setMessage(message).setPositiveButton("Понятно",null).show(); }
     private void error(Exception e) { if(!isFinishing()) notice(e.getMessage()==null?"Не удалось выполнить запрос":e.getMessage()); }
     private void task(Job job,Result result) {
@@ -126,11 +133,11 @@ public final class MainActivity extends Activity {
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i); LinearLayout card=new LinearLayout(this); card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(dp(12),dp(10),dp(12),dp(10)); card.setBackground(rounded(CARD));
-            ImageView poster=new ImageView(this); poster.setImageResource(R.drawable.camera); card.addView(poster,new LinearLayout.LayoutParams(-1,dp(110))); loadPoster(poster,item.optString(saved?"movie":"id"));
+            ImageView poster=new ImageView(this); poster.setImageResource(R.drawable.camera); card.addView(poster,new LinearLayout.LayoutParams(-1,dp(88))); loadPoster(poster,item.optString(saved?"movie":"id"));
             TextView title=text(item.optString("title"),15,TEXT); title.setMaxLines(2); title.setEllipsize(TextUtils.TruncateAt.END); card.addView(title);
             card.addView(text(saved?stateLabel(item):item.optString("year"),12,MUTED));
             card.setOnClickListener(v->{ if(saved) savedCard(item); else movie(item.optString("id")); });
-            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(150),-2); p.setMargins(0,0,dp(12),0); row.addView(card,p);
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(120),-2); p.setMargins(0,0,dp(12),0); row.addView(card,p);
         }
         target.addView(scroll);
     }
@@ -161,7 +168,7 @@ public final class MainActivity extends Activity {
     }
     private View movieRow(JSONObject item,Runnable click) {
         LinearLayout row=new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(dp(12),dp(10),dp(12),dp(10)); row.setBackground(rounded(CARD));
-        ImageView image=new ImageView(this); image.setImageResource(R.drawable.camera); row.addView(image,new LinearLayout.LayoutParams(dp(54),dp(76))); loadPoster(image,item.optString(item.has("state")?"movie":"id"));
+        ImageView image=new ImageView(this); image.setImageResource(R.drawable.camera); row.addView(image,new LinearLayout.LayoutParams(dp(43),dp(61))); loadPoster(image,item.optString(item.has("state")?"movie":"id"));
         LinearLayout info=new LinearLayout(this); info.setOrientation(LinearLayout.VERTICAL); info.setPadding(dp(14),0,0,0);
         TextView title=text(item.optString("title"),17,TEXT); title.setMaxLines(2); info.addView(title);
         info.addView(text(item.optString("year")+"  "+item.optString("director"),13,MUTED));
@@ -211,7 +218,7 @@ public final class MainActivity extends Activity {
             public void onItemSelected(AdapterView<?> parent,View v,int position,long id) {
                 JSONObject r=releases.optJSONObject(position); int seeds=r.optInt("seeds");
                 health.setText("●  "+seeds+" сидов · "+r.optInt("peers")+" пиров\n"+r.optString("release_title"));
-                health.setTextColor(seeds>=10?ACCENT:seeds>0?0xffe5bc73:0xffec8a88);
+                health.setTextColor(seeds>=10?ACCENT:seeds>0?0xff875a16:0xffb33732);
                 audio.setText(r.optString("audio").isEmpty()?"Дорожки и субтитры доступны в меню внешнего плеера":r.optString("audio"));
                 if(downloadButton[0]!=null) {
                     Button b=downloadButton[0]; b.setText("Скачать на телефон"); b.setEnabled(true);
@@ -441,7 +448,14 @@ public final class MainActivity extends Activity {
         }
     }
     private void settings() {
-        page("settings","Настройки"); section("Воспроизведение");
+        page("settings","Настройки"); section("Сервер");
+        try {
+            JSONObject session=Vault.load(this);
+            body.addView(text(session.optString("server","Не подключён"),15,MUTED));
+            if(!session.optString("key").isEmpty()) body.addView(button("Выйти из аккаунта",this::confirmLogout));
+            else body.addView(button("Войти по приглашению",this::home));
+        } catch(Exception e) { body.addView(button("Сбросить подключение",this::confirmLogout)); }
+        divider(); section("Воспроизведение");
         String[] quality={"480p","720p","1080p","2160p","Original"}; Spinner q=new Spinner(this); q.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,quality));
         q.setSelection(Math.max(0,Arrays.asList(quality).indexOf(prefs.getString("quality","1080p"))));
         body.addView(text("Предпочитаемое разрешение",16,TEXT)); body.addView(q);
@@ -456,7 +470,20 @@ public final class MainActivity extends Activity {
         body.addView(button("Выбрать папку по умолчанию",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),101)));
         body.addView(button("Использовать Download/MApp",()->{ prefs.edit().remove("folder").apply(); settings(); }));
         body.addView(text("Скачанные файлы остаются после удаления MApp. После переустановки добавьте их в библиотеку через системный выбор файлов.",14,MUTED));
-        divider(); section("Сервер"); try { body.addView(text(Vault.load(this).optString("server","Не подключён"),15,MUTED)); } catch(Exception ignored) { }
+    }
+    private void confirmLogout() {
+        new AlertDialog.Builder(this).setTitle("Выйти из аккаунта?")
+            .setMessage("История останется на сервере, скачанные файлы — на телефоне. Текущие загрузки остановятся. Для входа понадобится новая ссылка-приглашение.")
+            .setNegativeButton("Отмена",null).setPositiveButton("Выйти",(dialog,which)->{
+                try {
+                    Vault.clear(this);
+                    stopService(new Intent(this,DownloadService.class));
+                    playingMovie=""; selectedTorrent=""; selectedRelease="";
+                    currentMovie=null; pendingDownload=null;
+                    getIntent().setData(null);
+                    home();
+                } catch(Exception e) { error(e); }
+            }).show();
     }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);

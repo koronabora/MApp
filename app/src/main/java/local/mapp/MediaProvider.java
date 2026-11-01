@@ -51,6 +51,7 @@ public final class MediaProvider extends ContentProvider {
         if(!mode.equals("r")) throw new FileNotFoundException("Read only");
         try {
             JSONObject item=item(uri); Api api=new Api(getContext()); long length=item.getLong("size");
+            String sessionIdentity=Vault.sessionIdentity(getContext());
             HandlerThread thread=new HandlerThread("MApp media"); thread.start();
             return getContext().getSystemService(StorageManager.class).openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY,new ProxyFileDescriptorCallback() {
                 byte[] cache=new byte[0]; long cacheStart=-1;
@@ -58,6 +59,7 @@ public final class MediaProvider extends ContentProvider {
                 @Override public int onRead(long offset,int size,byte[] data) throws ErrnoException {
                     if(offset>=length) return 0;
                     try {
+                        if(sessionIdentity.isEmpty() || !sessionIdentity.equals(Vault.sessionIdentity(getContext()))) throw new IOException("Account disconnected");
                         int wanted=(int)Math.min(size,length-offset), copied=0;
                         while(copied<wanted) {
                             long cursor=offset+copied;

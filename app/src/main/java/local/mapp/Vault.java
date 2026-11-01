@@ -38,4 +38,12 @@ final class Vault {
         cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)));
         return new JSONObject(new String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8));
     }
+    static String sessionIdentity(Context context) {
+        return context.getSharedPreferences("vault",0).getString("session","");
+    }
+    static void clear(Context context) throws java.io.IOException {
+        if(!context.getSharedPreferences("vault",0).edit().remove("session").commit())
+            throw new java.io.IOException("Не удалось удалить подключение");
+        context.getSharedPreferences("streams",0).edit().clear().commit();
+    }
 }
