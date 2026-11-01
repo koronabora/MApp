@@ -133,20 +133,25 @@ public final class PlayerActivity extends Activity {
         ui.postDelayed(this,1000);
     }};
     private void checkpoint() {
+        checkpoint(false);
+    }
+    private void checkpoint(boolean finalUpdate) {
         if(player==null || !started) return;
         long position=completed?0:Math.max(0,player.getTime());
+        long duration=Math.max(0,player.getLength());
         setResult(RESULT_OK,new Intent().putExtra("extra_position",position));
-        if(savedUri!=null) Library.position(this,savedUri,position);
-        if(movie!=null && !movie.isEmpty() && !movie.startsWith("local-file:") && saving.compareAndSet(false,true)) io.submit(()->{ try {
-            JSONObject update=new JSONObject().put("position",position);
+        if(savedUri!=null) Library.progress(this,savedUri,position,duration,completed);
+        if(movie!=null && !movie.isEmpty() && !movie.startsWith("local-file:") && (finalUpdate || saving.compareAndSet(false,true))) io.submit(()->{ try {
+            JSONObject update=new JSONObject().put("position",position).put("duration",duration).put("completed",completed);
             String torrent=getIntent().getStringExtra("torrent");
             if(torrent!=null && !torrent.isEmpty()) update.put("torrent",torrent).put("file",getIntent().getIntExtra("file",0));
+            String episode=getIntent().getStringExtra("episode"); if(episode!=null && !episode.isEmpty()) update.put("episode",episode);
             new Api(this).request("PUT","/v1/history/"+movie,update);
         } catch(Exception ignored) { } finally { saving.set(false); } });
     }
-    @Override protected void onPause() { checkpoint(); if(player!=null) player.pause(); super.onPause(); }
+    @Override protected void onPause() { checkpoint(true); if(player!=null) player.pause(); super.onPause(); }
     @Override protected void onSaveInstanceState(Bundle state) { if(player!=null) state.putLong("position",Math.max(0,player.getTime())); super.onSaveInstanceState(state); }
-    @Override public void finish() { checkpoint(); super.finish(); }
+    @Override public void finish() { checkpoint(true); super.finish(); }
     @Override protected void onDestroy() {
         if(audioDialog!=null) audioDialog.dismiss();
         ui.removeCallbacksAndMessages(null);

@@ -21,10 +21,13 @@ final class Library {
         c.getSharedPreferences("library",0).edit().putString("items",result.toString()).commit();
     }
     static synchronized void position(Context c,String uri,long position) {
+        progress(c,uri,position,0,false);
+    }
+    static synchronized void progress(Context c,String uri,long position,long duration,boolean completed) {
         JSONArray items=all(c);
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.optJSONObject(i);
-            if(uri.equals(item.optString("uri"))) try { item.put("position",position); put(c,item); } catch(Exception ignored) { }
+            if(uri.equals(item.optString("uri"))) try { item.put("position",position).put("duration",duration).put("completed",completed); put(c,item); } catch(Exception ignored) { }
         }
     }
     static JSONArray grouped(Context c) {
