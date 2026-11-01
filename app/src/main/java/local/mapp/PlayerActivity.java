@@ -29,6 +29,10 @@ public final class PlayerActivity extends Activity {
     private boolean started, seeking, completed;
     private float buffering=100;
     private String movie, savedUri;
+    private boolean askAudio, audioHandled;
+    private AlertDialog audioDialog;
+    private long audioDeadline;
+    private String audioKey;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.BLACK);
@@ -43,9 +47,15 @@ public final class PlayerActivity extends Activity {
         setContentView(root);
         movie=getIntent().getStringExtra("movie"); savedUri=getIntent().getStringExtra("saved_uri");
         resume=state!=null?state.getLong("position"):getIntent().getLongExtra("position",0);
+        audioKey="audio:"+movie+":"+getIntent().getStringExtra("torrent")+":"+getIntent().getIntExtra("file",0)+":"+savedUri;
+        askAudio=resume==0 && getSharedPreferences("settings",0).getBoolean("ask_audio",false);
+        audioDeadline=System.currentTimeMillis()+30000;
         try {
-            engine=new LibVLC(this,new ArrayList<>(Arrays.asList("--no-video-title-show","--file-caching=1500","--network-caching=1500")));
+            // VLC's default 16 MiB prefetch read can wait across an unavailable torrent gap.
+            // Keep reads small so a seek can reach a different available range promptly.
+            engine=new LibVLC(this,new ArrayList<>(Arrays.asList("--no-video-title-show","--file-caching=1500","--network-caching=1500","--prefetch-buffer-size=1024","--prefetch-read-size=65536")));
             player=new MediaPlayer(engine); player.attachViews(video,null,true,false);
+            if(askAudio) player.setVolume(0);
             player.setEventListener(event->{
                 if(event.type==MediaPlayer.Event.Playing) {
                     pause.setText("Пауза");
@@ -86,11 +96,34 @@ public final class PlayerActivity extends Activity {
         if(tracks==null || tracks.length==0) { Toast.makeText(this,"Дорожек нет",Toast.LENGTH_SHORT).show(); return; }
         String[] names=new String[tracks.length]; int selected=-1, active=subtitles?player.getSpuTrack():player.getAudioTrack();
         for(int i=0;i<tracks.length;i++) { names[i]=tracks[i].id==-1?"Выключить":tracks[i].name; if(tracks[i].id==active) selected=i; }
-        new AlertDialog.Builder(this).setTitle(subtitles?"Субтитры":"Аудиодорожка").setSingleChoiceItems(names,selected,(d,n)->{ if(subtitles) player.setSpuTrack(tracks[n].id); else player.setAudioTrack(tracks[n].id); d.dismiss(); }).show();
+        new AlertDialog.Builder(this).setTitle(subtitles?"Субтитры":"Аудиодорожка").setSingleChoiceItems(names,selected,(d,n)->{ if(subtitles) player.setSpuTrack(tracks[n].id); else selectAudio(tracks[n].id); d.dismiss(); }).show();
+    }
+    private void selectAudio(int id) {
+        player.setAudioTrack(id); if(movie!=null || savedUri!=null) getSharedPreferences("playback",0).edit().putInt(audioKey,id).apply();
+    }
+    private void initialAudio() {
+        if(audioHandled || !started) return;
+        MediaPlayer.TrackDescription[] available=player.getAudioTracks();
+        ArrayList<MediaPlayer.TrackDescription> audio=new ArrayList<>();
+        if(available!=null) for(var track:available) if(track.id>=0) audio.add(track);
+        if(audio.isEmpty() && System.currentTimeMillis()<audioDeadline) return;
+        audioHandled=true;
+        int remembered=movie==null && savedUri==null?Integer.MIN_VALUE:getSharedPreferences("playback",0).getInt(audioKey,Integer.MIN_VALUE);
+        for(var track:audio) if(track.id==remembered && player.getAudioTrack()!=remembered) player.setAudioTrack(remembered);
+        if(!askAudio || audio.size()<2) { player.setVolume(100); return; }
+        player.pause();
+        String[] names=new String[audio.size()]; int selected=0;
+        for(int i=0;i<names.length;i++) { names[i]=audio.get(i).name; if(audio.get(i).id==player.getAudioTrack()) selected=i; }
+        audioDialog=new AlertDialog.Builder(this).setTitle("Выберите аудиодорожку")
+            .setSingleChoiceItems(names,selected,(d,n)->{
+                selectAudio(audio.get(n).id); player.setTime(0); player.setVolume(100); player.play(); d.dismiss();
+            }).setNegativeButton("Отмена",(d,n)->finish()).setOnCancelListener(d->finish()).create();
+        audioDialog.show();
     }
     private static String clock(long ms) { long s=Math.max(0,ms/1000); return String.format(Locale.ROOT,"%d:%02d:%02d",s/3600,(s/60)%60,s%60); }
     private final Runnable tick=new Runnable() { public void run() {
         if(player==null || isFinishing()) return;
+        initialAudio();
         if(started && player.getLength()>0) {
             long position=player.getTime(), length=player.getLength();
             if(!seeking) seek.setProgress((int)(Math.max(0,position)*10000/length));
@@ -115,6 +148,7 @@ public final class PlayerActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) { if(player!=null) state.putLong("position",Math.max(0,player.getTime())); super.onSaveInstanceState(state); }
     @Override public void finish() { checkpoint(); super.finish(); }
     @Override protected void onDestroy() {
+        if(audioDialog!=null) audioDialog.dismiss();
         ui.removeCallbacksAndMessages(null);
         if(bridge!=null) bridge.close();
         MediaPlayer old=player; LibVLC oldEngine=engine; ParcelFileDescriptor oldDescriptor=descriptor;
