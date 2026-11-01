@@ -33,6 +33,49 @@ public final class StreamInstrumentation extends Instrumentation {
         if(!denied || attempts[0]!=3) throw new AssertionError("Retry limit failed");
     }
     private Bundle arguments;
+    private void checkFeedback(Api api) throws Exception {
+        var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0);
+        var enabled=new java.util.concurrent.CountDownLatch(1);
+        Diagnostics.enable(context,true,message->enabled.countDown());
+        if(!enabled.await(15,java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Log creation timed out");
+        api.request("GET","/v1/health",null);
+        Thread.sleep(2500);
+        String path=prefs.getString("diagnostic_uri","");
+        if(path.isEmpty()) throw new AssertionError("No shared log file");
+        String log;
+        try(var input=context.getContentResolver().openInputStream(android.net.Uri.parse(path))) { log=new String(Api.read(input,3*1024*1024),java.nio.charset.StandardCharsets.UTF_8); }
+        if(!log.contains("/v1/health") || log.contains(api.key)) throw new AssertionError("Missing diagnostics or exposed key");
+        var disabled=new java.util.concurrent.CountDownLatch(1);
+        Diagnostics.enable(context,false,message->disabled.countDown());
+        if(!disabled.await(15,java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Log deletion timed out");
+        if(new org.json.JSONArray(prefs.getString("diagnostic_files","[]")).length()!=0) throw new AssertionError("Log files not removed");
+        boolean exists=false;
+        try(var input=context.getContentResolver().openInputStream(android.net.Uri.parse(path))) { exists=input!=null; } catch(java.io.FileNotFoundException | IllegalArgumentException expected) { }
+        if(exists) throw new AssertionError("Disabled log remains readable");
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            waitForIdleSync();
+            if(find(activity.getWindow().getDecorView(),v->v instanceof android.widget.TextView && ((android.widget.TextView)v).getText().toString().equals("Кинозал"))==null) throw new AssertionError("Home title");
+            runOnMainSync(()->{ try {
+                var method=MainActivity.class.getDeclaredMethod("showScreenshot",String.class); method.setAccessible(true); method.invoke(activity,"/v1/releases/local:2/screenshots/0");
+            } catch(Exception e) { throw new RuntimeException(e); } });
+            var dialogField=MainActivity.class.getDeclaredField("screenshotDialog"); dialogField.setAccessible(true);
+            var dialog=(android.app.Dialog)dialogField.get(activity);
+            long deadline=System.currentTimeMillis()+30000;
+            android.widget.ImageView[] image={null};
+            while(System.currentTimeMillis()<deadline) {
+                runOnMainSync(()->image[0]=(android.widget.ImageView)find(dialog.getWindow().getDecorView(),v->v instanceof ZoomImage));
+                if(image[0]!=null && image[0].getDrawable()!=null) break;
+                Thread.sleep(100);
+            }
+            if(image[0]==null || image[0].getDrawable()==null) throw new AssertionError("Fullscreen screenshot did not load");
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"feedback-viewer.png"))) {
+                getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);
+            }
+            runOnMainSync(()->find(dialog.getWindow().getDecorView(),v->"Закрыть скриншот".contentEquals(v.getContentDescription()==null?"":v.getContentDescription())).performClick());
+            if(dialog.isShowing()) throw new AssertionError("Screenshot close button");
+        } finally { runOnMainSync(activity::finish); }
+    }
     private void checkEpisodes(Api api) throws Exception {
         var context=getTargetContext();
         String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:3")).getString("id");
@@ -250,6 +293,10 @@ public final class StreamInstrumentation extends Instrumentation {
             var context=getTargetContext();
             Api api=new Api(context);
             integrityChecks();
+            if(arguments!=null && arguments.containsKey("feedback")) {
+                checkFeedback(api); result.putString("stream","PASS: shared-folder diagnostics, no credentials, deletion, home title and screenshot viewer");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("episodes")) {
                 checkEpisodes(api); result.putString("stream","PASS: episode selector, independent resume positions, MKV playback/subtitles and persisted history");
                 finish(Activity.RESULT_OK,result); return;
