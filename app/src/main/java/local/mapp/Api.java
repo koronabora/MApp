@@ -17,7 +17,7 @@ final class Api {
     }
     final String server, pin, key;
     final SSLSocketFactory sockets;
-    Api(Context context) throws Exception { this(Vault.load(context)); }
+    Api(Context context) throws Exception { this(Vault.load(context)); Diagnostics.init(context); }
     Api(JSONObject session) throws Exception {
         server = session.optString("server"); pin = session.optString("pin"); key = session.optString("key");
         URL url = new URL(server);
@@ -48,6 +48,7 @@ final class Api {
         return c;
     }
     JSONObject request(String method, String path, JSONObject body) throws Exception {
+        long started=System.currentTimeMillis();
         HttpsURLConnection c = open(path);
         try {
             c.setRequestMethod(method);
@@ -56,9 +57,11 @@ final class Api {
                 try (var out=c.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
             }
             int code = c.getResponseCode();
+            Diagnostics.event("api",method+" "+path.split("\\?",2)[0]+" status="+code+" ms="+(System.currentTimeMillis()-started));
             if(code<200 || code>=300) throw new Failure(code);
             try(InputStream in=c.getInputStream()) { return new JSONObject(new String(read(in,16*1024*1024), StandardCharsets.UTF_8)); }
-        } finally { c.disconnect(); }
+        } catch(Exception e) { Diagnostics.event("api-error",e.getClass().getSimpleName()); throw e; }
+        finally { c.disconnect(); }
     }
     static byte[] read(InputStream in,int limit) throws java.io.IOException {
         ByteArrayOutputStream out=new ByteArrayOutputStream(); byte[] buffer=new byte[16384]; int count;

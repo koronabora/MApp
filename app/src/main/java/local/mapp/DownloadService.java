@@ -46,6 +46,7 @@ public final class DownloadService extends Service {
             Uri target=Uri.parse(item.getString("uri"));
             long total=item.getLong("size"), done=item.optLong("downloaded");
             item.put("state","downloading"); Library.put(this,item);
+            Diagnostics.init(this); Diagnostics.event("download","started bytes="+item.optLong("downloaded")+" total="+item.optLong("size"));
             try(ParcelFileDescriptor fd=getContentResolver().openFileDescriptor(target,"rw");
                 FileOutputStream output=new FileOutputStream(fd.getFileDescriptor()); FileChannel channel=output.getChannel()) {
                 done=Math.min(done,channel.size()); channel.position(done); channel.truncate(done);
@@ -70,11 +71,13 @@ public final class DownloadService extends Service {
                 }
             }
             item.put("state",done==total?"complete":"paused");
+            Diagnostics.event("download",item.optString("state")+" bytes="+done);
             if(done==total && item.optBoolean("mediastore")) {
                 ContentValues values=new ContentValues(); values.put(MediaStore.Downloads.IS_PENDING,0);
                 getContentResolver().update(Uri.parse(item.getString("uri")),values,null,null);
             }
         } catch(Exception e) {
+            Diagnostics.event("download-error",e.getClass().getSimpleName());
             try { item.put("state","paused").put("error",e.getMessage()); } catch(Exception ignored) { }
         }
         if(cancelled.remove(item.optString("id"))) {

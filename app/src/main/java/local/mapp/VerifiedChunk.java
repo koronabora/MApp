@@ -14,6 +14,7 @@ final class VerifiedChunk {
             catch(java.io.InterruptedIOException e) { throw e; }
             catch(Api.Failure e) { if(e.code!=503 && e.code!=502 && e.code!=504) throw e; failure=e; }
             catch(IOException e) { failure=e; }
+            Diagnostics.event("chunk-retry","attempt="+(attempt+1)+" error="+failure.getClass().getSimpleName());
         }
         throw new IOException("Не удалось проверить целостность части после трёх попыток. Загрузка приостановлена.",failure);
     }
@@ -24,6 +25,7 @@ final class VerifiedChunk {
         connection.setRequestProperty("Accept-Encoding","identity");
         try {
             int status=connection.getResponseCode();
+            Diagnostics.event("chunk","start="+start+" end="+end+" status="+status);
             if(status!=206) throw new Api.Failure(status);
             byte[] bytes;
             try(var input=connection.getInputStream()) { bytes=Api.read(input,(int)(end-start+1)); }

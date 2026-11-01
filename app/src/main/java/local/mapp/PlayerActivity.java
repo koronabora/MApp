@@ -35,6 +35,7 @@ public final class PlayerActivity extends Activity {
     private String audioKey;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        Diagnostics.init(this); Diagnostics.event("player","created position="+getIntent().getLongExtra("position",0));
         LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.BLACK);
         root.setOnApplyWindowInsetsListener((v,insets)->{ v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom()); return insets; });
         VLCVideoLayout video=new VLCVideoLayout(this); root.addView(video,new LinearLayout.LayoutParams(-1,0,1));
@@ -57,6 +58,8 @@ public final class PlayerActivity extends Activity {
             player=new MediaPlayer(engine); player.attachViews(video,null,true,false);
             if(askAudio) player.setVolume(0);
             player.setEventListener(event->{
+                if(event.type!=org.videolan.libvlc.MediaPlayer.Event.TimeChanged && event.type!=org.videolan.libvlc.MediaPlayer.Event.PositionChanged)
+                    Diagnostics.event("player-event","type="+event.type);
                 if(event.type==MediaPlayer.Event.Playing) {
                     pause.setText("Пауза");
                     if(!started) { started=true; if(resume>0) player.setTime(resume); }
@@ -136,6 +139,7 @@ public final class PlayerActivity extends Activity {
         checkpoint(false);
     }
     private void checkpoint(boolean finalUpdate) {
+        Diagnostics.event("checkpoint","final="+finalUpdate);
         if(player==null || !started) return;
         long position=completed?0:Math.max(0,player.getTime());
         long duration=Math.max(0,player.getLength());
