@@ -20,7 +20,7 @@ public final class MainActivity extends Activity {
     private int BG=0xfffff8f2, TEXT=0xff29201a, MUTED=0xff6e625a, BUTTON=0xffffdec5;
     private static final int CARD=0xffffffff, ACCENT=0xffb84d00;
     private final ExecutorService io=Executors.newFixedThreadPool(4);
-    private final ExecutorService images=Executors.newFixedThreadPool(2);
+    private final ExecutorService images=Executors.newFixedThreadPool(6);
     private final Handler ui=new Handler(Looper.getMainLooper());
     private LinearLayout root, body;
     private String screen="home", playingMovie="";
@@ -38,11 +38,13 @@ public final class MainActivity extends Activity {
     private String playingEpisode="", playingTorrent="";
     private int playingFile;
     private SharedPreferences prefs;
+    private Dialog screenshotDialog;
     interface Job { JSONObject run() throws Exception; }
     interface Result { void accept(JSONObject data) throws Exception; }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); prefs=getSharedPreferences("settings",0);
+        Diagnostics.init(this); Diagnostics.event("lifecycle","MainActivity created");
         if(state!=null) { playingMovie=state.getString("playingMovie",""); playingEpisode=state.getString("playingEpisode",""); playingTorrent=state.getString("playingTorrent",""); playingFile=state.getInt("playingFile"); }
         handle(getIntent());
     }
@@ -76,7 +78,7 @@ public final class MainActivity extends Activity {
         TEXT=contrast(BG); MUTED=TEXT;
         getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(TEXT==Color.WHITE?0:View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
-        screen=name; generation++;
+        screen=name; generation++; Diagnostics.event("screen",name);
         root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BG);
         root.setPadding(dp(22),dp(16),dp(22),dp(16));
         root.setOnApplyWindowInsetsListener((v,insets)->{
@@ -101,7 +103,7 @@ public final class MainActivity extends Activity {
         if(view instanceof Button && Boolean.TRUE.equals(view.getTag())) { view.setTag(null); view.setEnabled(true); ((Button)view).setText("Повторить"); }
         if(view instanceof android.view.ViewGroup group) for(int i=0;i<group.getChildCount();i++) resetBusy(group.getChildAt(i));
     }
-    private void error(Exception e) { if(!isFinishing()) { if(body!=null) resetBusy(body); notice(e.getMessage()==null?"Не удалось выполнить запрос":e.getMessage()); } }
+    private void error(Exception e) { Diagnostics.event("ui-error",e.getClass().getSimpleName()); if(!isFinishing()) { if(body!=null) resetBusy(body); notice(e.getMessage()==null?"Не удалось выполнить запрос":e.getMessage()); } }
     private void task(Job job,Result result) {
         int version=generation;
         io.submit(()->{ try { JSONObject data=job.run(); ui.post(()->{ if(version==generation && !isFinishing()) try { result.accept(data); } catch(Exception e) { error(e); } }); }
@@ -119,21 +121,19 @@ public final class MainActivity extends Activity {
         },result->home());
     }
     private void home() {
-        page("home","MApp");
+        page("home","Кинозал");
         try { if(Vault.load(this).optString("key").isEmpty()) { welcome(); return; } } catch(Exception e) { welcome(); return; }
-        section("История"); LinearLayout history=new LinearLayout(this); body.addView(history);
+        section("История просмотра"); LinearLayout history=new LinearLayout(this); body.addView(history);
         history.addView(text("Загружаем историю…",15,MUTED)); divider();
-        section("Поиск"); body.addView(button("Название фильма или сериала",()->searchPage("")));
+        section("Поиск"); ImageButton search=new ImageButton(this); search.setImageResource(R.drawable.search); search.setImageTintList(android.content.res.ColorStateList.valueOf(contrast(BUTTON))); search.setBackground(rounded(BUTTON)); search.setContentDescription("Поиск фильма или сериала"); search.setOnClickListener(v->searchPage("")); body.addView(search,new LinearLayout.LayoutParams(dp(64),dp(56)));
         LinearLayout recent=new LinearLayout(this); recent.setOrientation(LinearLayout.VERTICAL); body.addView(recent); divider();
         LinearLayout savedHeader=new LinearLayout(this); savedHeader.setGravity(Gravity.CENTER_VERTICAL);
         TextView savedTitle=text("Сохранённое",21,TEXT); savedTitle.setTypeface(null,Typeface.BOLD);
         savedHeader.addView(savedTitle,new LinearLayout.LayoutParams(0,-2,1)); savedHeader.addView(button("Подробнее →",this::library)); body.addView(savedHeader); strip(body,Library.grouped(this),true);
         task(()->request("GET","/v1/home",null),data->{
             history.removeAllViews(); strip(history,data.getJSONArray("history"),false);
-            JSONArray queries=data.getJSONArray("queries");
-            for(int i=0;i<Math.min(4,queries.length());i++) {
-                String q=queries.getString(i); TextView t=text("↗  "+q,16,MUTED); t.setMaxLines(1); t.setEllipsize(TextUtils.TruncateAt.END); t.setOnClickListener(v->searchPage(q)); recent.addView(t);
-            }
+            JSONArray visits=new JSONArray(prefs.getString(visitKey(),"[]"));
+            if(visits.length()>0) strip(recent,visits,false);
         });
     }
     private void welcome() {
@@ -154,9 +154,11 @@ public final class MainActivity extends Activity {
             if(saved) savedPoster(poster,item.optJSONObject("card"));
             LinearLayout info=new LinearLayout(this); info.setOrientation(LinearLayout.VERTICAL); info.setPadding(dp(12),0,0,0); card.addView(info,new LinearLayout.LayoutParams(0,-1,1));
             TextView title=text(item.optString("title"),15,0xff29201a); title.setMaxLines(2); title.setEllipsize(TextUtils.TruncateAt.END); info.addView(title,new LinearLayout.LayoutParams(-1,0,1));
+            TextView director=text(director(item),12,0xff6e625a); director.setTag("director"); director.setPadding(0,0,0,0); director.setMaxLines(1); director.setEllipsize(TextUtils.TruncateAt.END); info.addView(director);
             TextView caption=text(saved?stateLabel(item):item.optString("year"),12,0xff6e625a); caption.setMaxLines(1); info.addView(caption);
             card.setOnClickListener(v->{ if(saved) savedCard(item); else movie(item.optString("id")); });
-            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(250),dp(112)); p.setMargins(0,0,dp(12),0); row.addView(card,p);
+            int width=Math.max(180,Math.min(300,(int)(title.getPaint().measureText(item.optString("title"))/getResources().getDisplayMetrics().density)+100));
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(width),dp(112)); p.setMargins(0,0,dp(12),0); row.addView(card,p);
         }
         LinearLayout.LayoutParams spacing=new LinearLayout.LayoutParams(-1,dp(112)); spacing.topMargin=dp(16); target.addView(scroll,spacing);
     }
@@ -164,6 +166,12 @@ public final class MainActivity extends Activity {
         page("search","Поиск"); EditText input=new EditText(this); input.setTextColor(TEXT); input.setHintTextColor(MUTED); input.setSingleLine(true); input.setHint("Фильм или сериал"); input.setImeOptions(EditorInfo.IME_ACTION_SEARCH); body.addView(input);
         TextView status=text("Введите название — ищем и точные, и похожие совпадения",14,MUTED); body.addView(status);
         LinearLayout results=new LinearLayout(this); results.setOrientation(LinearLayout.VERTICAL); body.addView(results);
+        LinearLayout recent=new LinearLayout(this); recent.setOrientation(LinearLayout.VERTICAL); body.addView(recent);
+        task(()->request("GET","/v1/home",null),data->{
+            recent.addView(text("История поиска",18,TEXT)); JSONArray queries=data.getJSONArray("queries");
+            for(int i=0;i<queries.length();i++) { String q=queries.getString(i); recent.addView(button(q,()->searchPage(q))); }
+            recent.setVisibility(input.length()==0?View.VISIBLE:View.GONE);
+        });
         Runnable[] pending={null}; int[] sequence={0};
         java.util.function.Consumer<Boolean> find=live->{
             String q=input.getText().toString().trim(); if(q.length()<2) return;
@@ -180,13 +188,13 @@ public final class MainActivity extends Activity {
                         approximate=true; View line=new View(this); line.setBackgroundColor(0xffc8bdb5); results.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));
                         results.addView(text("Похожие названия",16,MUTED));
                     }
-                    results.addView(movieRow(item,()->movie(item.optString("id"))));
+                    results.addView(movieRow(item,()->{ rememberVisit(item); movie(item.optString("id")); }));
                 }
             });
         };
         input.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s,int st,int count,int after) { }
-            public void onTextChanged(CharSequence s,int st,int before,int count) { if(pending[0]!=null) ui.removeCallbacks(pending[0]); pending[0]=()->find.accept(false); ui.postDelayed(pending[0],400); }
+            public void onTextChanged(CharSequence s,int st,int before,int count) { recent.setVisibility(s.length()==0?View.VISIBLE:View.GONE); if(s.length()<2) { sequence[0]++; results.removeAllViews(); } if(pending[0]!=null) ui.removeCallbacks(pending[0]); pending[0]=()->find.accept(false); ui.postDelayed(pending[0],400); }
             public void afterTextChanged(Editable s) { }
         });
         input.setOnEditorActionListener((v,id,event)->{ if(id==EditorInfo.IME_ACTION_SEARCH) { find.accept(true); return true; } return false; });
@@ -199,10 +207,28 @@ public final class MainActivity extends Activity {
         savedPoster(image,item.optJSONObject("card"));
         LinearLayout info=new LinearLayout(this); info.setOrientation(LinearLayout.VERTICAL); info.setPadding(dp(14),0,0,0);
         TextView title=text(item.optString("title"),17,0xff29201a); title.setMaxLines(2); info.addView(title);
-        info.addView(text(item.optString("year")+"  "+item.optString("director"),13,0xff6e625a));
+        info.addView(text(item.optString("year"),13,0xff6e625a));
+        TextView director=text(director(item),13,0xff6e625a); director.setTag("director"); director.setMaxLines(2); director.setEllipsize(TextUtils.TruncateAt.END); info.addView(director);
         if(item.has("state")) { TextView progress=text(stateLabel(item),13,ACCENT); progress.setTag(item.optString("id")); info.addView(progress); }
-        row.addView(info,new LinearLayout.LayoutParams(0,-2,1)); row.setOnClickListener(v->click.run());
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2); p.setMargins(0,dp(6),0,dp(6)); row.setLayoutParams(p); return row;
+        int maxText=Math.max(dp(100),getResources().getDisplayMetrics().widthPixels-dp(130));
+        title.setMaxWidth(maxText); director.setMaxWidth(maxText);
+        row.addView(info,new LinearLayout.LayoutParams(-2,-2)); row.setOnClickListener(v->click.run());
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-2,-2); p.setMargins(0,dp(6),0,dp(6)); row.setLayoutParams(p); return row;
+    }
+    private String director(JSONObject item) {
+        JSONObject card=item.optJSONObject("card"); String value=item.optString("director",card==null?"":card.optString("director"));
+        return value.isEmpty()?"Режиссёр не указан":"Режиссёр: "+primaryDirector(value);
+    }
+    private String primaryDirector(String value) { return value.split("(?i)\\s+(?:О фильме|О сериале|Описание|В ролях|Жанр|Страна)\\s*:",2)[0].split("[/,;]",2)[0].trim(); }
+    private String visitKey() {
+        try { JSONObject session=Vault.load(this); return "search_visits:"+session.optString("server")+":"+session.optString("user_id"); }
+        catch(Exception e) { return "search_visits:offline"; }
+    }
+    private void rememberVisit(JSONObject item) {
+        try { String key=visitKey(); JSONArray old=new JSONArray(prefs.getString(key,"[]")), next=new JSONArray(); next.put(item);
+            for(int i=0;i<old.length() && next.length()<20;i++) if(!old.getJSONObject(i).optString("id").equals(item.optString("id"))) next.put(old.getJSONObject(i));
+            prefs.edit().putString(key,next.toString()).apply();
+        } catch(Exception e) { error(e); }
     }
     private void movie(String id) {
         preferredRelease="";
@@ -225,6 +251,8 @@ public final class MainActivity extends Activity {
                     var connection=new Api(this).open(path);
                     try {
                         if(connection.getResponseCode()!=200) return;
+                        String director=connection.getHeaderField("X-MCore-Director");
+                        if(director!=null && !director.isEmpty()) prefs.edit().putString("image-director:"+server+path,Uri.decode(director)).apply();
                         try(var input=connection.getInputStream()) { bytes=Api.read(input,4*1024*1024); }
                         ImageCache.put(this,server,path,bytes);
                     } finally { connection.disconnect(); }
@@ -233,13 +261,43 @@ public final class MainActivity extends Activity {
                     android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
                     options.inSampleSize=Math.max(1,Math.max(options.outWidth,options.outHeight)/600); options.inJustDecodeBounds=false;
                     var bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
-                    ui.post(()->{ if(version==generation && path.equals(image.getTag()) && bitmap!=null) { image.setImageBitmap(bitmap); image.setScaleType(path.endsWith("/poster") && image.getLayoutParams().width<0?ImageView.ScaleType.FIT_CENTER:ImageView.ScaleType.CENTER_CROP); image.setVisibility(View.VISIBLE); } });
+                    ui.post(()->{ if(version==generation && path.equals(image.getTag()) && bitmap!=null) {
+                        image.setImageBitmap(bitmap); image.setScaleType(path.endsWith("/poster") && image.getLayoutParams().width<0?ImageView.ScaleType.FIT_CENTER:ImageView.ScaleType.CENTER_CROP); image.setVisibility(View.VISIBLE);
+                        String director=prefs.getString("image-director:"+server+path,"");
+                        if(!director.isEmpty() && image.getParent() instanceof android.view.ViewGroup group) {
+                            TextView label=group.findViewWithTag("director"); if(label!=null) label.setText("Режиссёр: "+primaryDirector(director));
+                        }
+                    } });
             } catch(Exception ignored) { /* Source may not provide a poster; keep the local icon. */ }
         });
     }
     private void savedPoster(ImageView image,JSONObject card) {
         if(card==null || card.optString("poster_thumbnail").isEmpty()) return;
         try { byte[] bytes=android.util.Base64.decode(card.getString("poster_thumbnail"),android.util.Base64.NO_WRAP); var bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length); if(bitmap!=null) { image.setImageBitmap(bitmap); image.setScaleType(image.getLayoutParams().width<0?ImageView.ScaleType.FIT_CENTER:ImageView.ScaleType.CENTER_CROP); } } catch(Exception ignored) { }
+    }
+    private void showScreenshot(String path) {
+        Dialog dialog=new Dialog(this,android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        if(screenshotDialog!=null) screenshotDialog.dismiss(); screenshotDialog=dialog;
+        dialog.setOnDismissListener(d->{ if(screenshotDialog==dialog) screenshotDialog=null; });
+        FrameLayout frame=new FrameLayout(this); frame.setBackgroundColor(Color.BLACK);
+        ZoomImage image=new ZoomImage(this); frame.addView(image,new FrameLayout.LayoutParams(-1,-1));
+        TextView loading=text("Загружаем скриншот…",16,Color.WHITE);
+        FrameLayout.LayoutParams center=new FrameLayout.LayoutParams(-2,-2,Gravity.CENTER); frame.addView(loading,center);
+        Button close=button("×",dialog::dismiss); close.setContentDescription("Закрыть скриншот");
+        FrameLayout.LayoutParams corner=new FrameLayout.LayoutParams(dp(64),dp(64),Gravity.TOP|Gravity.END); corner.topMargin=dp(28); frame.addView(close,corner);
+        dialog.setContentView(frame); dialog.show();
+        images.submit(()->{ try {
+            var connection=new Api(this).open(path); byte[] bytes;
+            try { if(connection.getResponseCode()!=200) throw new java.io.IOException(); try(var in=connection.getInputStream()) { bytes=Api.read(in,16*1024*1024); } } finally { connection.disconnect(); }
+            var options=new android.graphics.BitmapFactory.Options(); options.inJustDecodeBounds=true;
+            android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
+            options.inSampleSize=1;
+            while((long)options.outWidth*options.outHeight/options.inSampleSize/options.inSampleSize>8000000) options.inSampleSize*=2;
+            options.inJustDecodeBounds=false;
+            var bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
+            if(bitmap==null) throw new java.io.IOException();
+            ui.post(()->{ if(dialog.isShowing()) { loading.setVisibility(View.GONE); image.setImageBitmap(bitmap); image.fit(); } });
+        } catch(Exception e) { ui.post(()->{ if(dialog.isShowing()) loading.setText("Скриншот сейчас недоступен"); }); } });
     }
     private void showMovie(JSONObject data) throws Exception {
         generation++; chosenFile=null; chosenTorrent=""; selectedEpisode=""; preferredEpisode="";
@@ -300,13 +358,14 @@ public final class MainActivity extends Activity {
                 int selection=++sourceSelection;
                 episodePanel.removeAllViews();
                 loadSource(r,"",episodePanel,audio,selection,System.currentTimeMillis());
-                health.setText(r.optString("release_title")+(r.optBoolean("swarm_stale")?"\nДоступность: последнее известное состояние":""));
+                health.setText(r.optString("release_title")+(r.optBoolean("swarm_stale")?"\nНе удалось обновить число раздающих. Показаны сохранённые данные.":""));
                 audio.setText(r.optString("audio").isEmpty()?"Дорожки и субтитры доступны в меню плеера":r.optString("audio"));
                 frames.removeAllViews();
                 for(int i=0;i<3;i++) {
                     ImageView frame=new ImageView(MainActivity.this); frame.setContentDescription("Скриншот раздачи "+(i+1)); frame.setVisibility(View.GONE);
                     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(dp(260),dp(146)); p.setMargins(0,dp(12),dp(10),dp(12)); frames.addView(frame,p);
-                    loadImage(frame,"/v1/releases/"+Uri.encode(r.optString("id"))+"/screenshots/"+i);
+                    String path="/v1/releases/"+Uri.encode(r.optString("id"))+"/screenshots/"+i;
+                    loadImage(frame,path); frame.setOnClickListener(tapped->showScreenshot(path));
                 }
             }
         }); spinner.setSelection(selected);
@@ -540,9 +599,13 @@ public final class MainActivity extends Activity {
     }
     private void buffer(String torrent,JSONObject file,Button button,long started) {
         button.setTag(Boolean.TRUE); button.setEnabled(false);
+        if(System.currentTimeMillis()-started<500) button.setText("Подготовка видео • проверяем индекс и буфер…");
+        int selection=sourceSelection; JSONObject choice=chosenFile;
         int seconds=prefs.getInt("buffer",15);
         long position=file.has("episode")?file.optLong("position"):currentMovie.optLong("position");
         task(()->request("GET","/v1/torrents/"+torrent+"?file="+file.getInt("index")+"&buffer="+seconds+"&position="+position,null),status->{
+            if(selection!=sourceSelection || choice!=chosenFile) { button.setTag(null); button.setEnabled(true); button.setText("Смотреть"); return; }
+            Diagnostics.event("buffer","ready="+status.optBoolean("ready")+" percent="+status.optInt("buffer_percent")+" missing="+status.optLong("buffer_missing_bytes")+" position="+position);
             if(!status.isNull("error") && !status.optString("error").isEmpty()) {
                 button.setTag(null); button.setEnabled(true); button.setText("Повторить"); notice(status.getString("error")); return;
             }
@@ -554,8 +617,11 @@ public final class MainActivity extends Activity {
                 play(uri,currentMovie.optString("id"),position); return;
             }
             if(System.currentTimeMillis()-started>300000) { button.setTag(null); button.setEnabled(true); button.setText("Повторить буферизацию"); notice("Буфер пока не готов. Попробуйте раздачу с большим числом сидов."); return; }
-            button.setText(status.isNull("buffer_eta")?"Буферизация • ожидаем пиров…":"Буферизация • примерно "+status.optInt("buffer_eta")+" с");
-            int version=generation; ui.postDelayed(()->{ if(version==generation) buffer(torrent,file,button,started); },1500);
+            button.setText((status.isNull("media")?"Получаем метаданные и индекс…":"Буферизация")+" • "+status.optInt("buffer_percent")+"%"+(status.isNull("buffer_eta")?" • ожидаем данные":" • примерно "+status.optInt("buffer_eta")+" с"));
+            int version=generation; ui.postDelayed(()->{ if(version==generation) {
+                if(selection==sourceSelection && choice==chosenFile) buffer(torrent,file,button,started);
+                else { button.setTag(null); button.setEnabled(true); button.setText("Смотреть"); }
+            } },1500);
         });
     }
     private void play(Uri uri,String movie,long position) {
@@ -710,6 +776,9 @@ public final class MainActivity extends Activity {
         body.addView(button("Выбрать папку по умолчанию",()->startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),101)));
         body.addView(button("Использовать Download/MApp",()->{ prefs.edit().remove("folder").apply(); settings(); }));
         body.addView(text("Скачанные файлы остаются после удаления MApp. Выберите прежнюю папку — библиотека восстановится автоматически только из неё.",14,MUTED));
+        Switch diagnostics=new Switch(this); diagnostics.setText("Расширенное логирование"); diagnostics.setTextColor(TEXT); diagnostics.setChecked(prefs.getBoolean("diagnostics",false)); body.addView(diagnostics);
+        body.addView(text("MApp-debug.txt в папке сохранения видео. Доступен по USB. При выключении логи удаляются.",14,MUTED));
+        diagnostics.setOnCheckedChangeListener((b,value)->{ diagnostics.setEnabled(false); Diagnostics.enable(this,value,message->ui.post(()->{ diagnostics.setEnabled(true); notice(message); })); });
         try { body.addView(text("MApp "+getPackageManager().getPackageInfo(getPackageName(),0).versionName,13,MUTED)); } catch(Exception ignored) { }
         divider(); section("Каталог сервера"); TextView sync=text("Получаем состояние синхронизации…",14,MUTED); body.addView(sync);
         syncProgress(sync,generation);
@@ -785,5 +854,5 @@ public final class MainActivity extends Activity {
         if(!screen.equals("home")) { home(); return; }
         new AlertDialog.Builder(this).setTitle("Выйти из MApp?").setPositiveButton("Выйти",(d,n)->finish()).setNegativeButton("Остаться",null).show();
     }
-    @Override protected void onDestroy() { generation++; ui.removeCallbacksAndMessages(null); io.shutdown(); images.shutdownNow(); super.onDestroy(); }
+    @Override protected void onDestroy() { if(screenshotDialog!=null) screenshotDialog.dismiss(); generation++; ui.removeCallbacksAndMessages(null); io.shutdown(); images.shutdownNow(); super.onDestroy(); }
 }
