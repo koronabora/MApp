@@ -11,6 +11,10 @@ import javax.net.ssl.*;
 import org.json.JSONObject;
 
 final class Api {
+    static final class Failure extends java.io.IOException {
+        final int code;
+        Failure(int code) { super(code==401?"Ссылка истекла или доступ отозван":"Ошибка MCore: "+code); this.code=code; }
+    }
     final String server, pin, key;
     final SSLSocketFactory sockets;
     Api(Context context) throws Exception { this(Vault.load(context)); }
@@ -52,7 +56,7 @@ final class Api {
                 try (var out=c.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
             }
             int code = c.getResponseCode();
-            if(code<200 || code>=300) throw new java.io.IOException(code==401?"Ссылка истекла или доступ отозван": "Ошибка MCore: " + code);
+            if(code<200 || code>=300) throw new Failure(code);
             try(InputStream in=c.getInputStream()) { return new JSONObject(new String(read(in,16*1024*1024), StandardCharsets.UTF_8)); }
         } finally { c.disconnect(); }
     }
