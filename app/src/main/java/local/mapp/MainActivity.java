@@ -75,6 +75,7 @@ public final class MainActivity extends Activity {
         state.putString("playingUri",playingUri);
     }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handle(intent); }
+    @Override protected void onResume() { super.onResume(); AppUpdates.resume(this); }
     private void handle(Intent intent) {
         Uri uri=intent.getData();
         if(uri!=null && "mapp".equals(uri.getScheme()) && "pair".equals(uri.getHost())) { pair(uri); intent.setData(null); }
@@ -388,7 +389,7 @@ public final class MainActivity extends Activity {
         void show() throws Exception {
             section(data.getString("title"));
             ImageView poster=new ImageView(MainActivity.this); poster.setVisibility(View.GONE);
-            LinearLayout.LayoutParams posterSize=new LinearLayout.LayoutParams(dp(118),dp(174)); posterSize.setMargins(0,dp(24),0,dp(24)); posterSize.gravity=Gravity.START;
+            LinearLayout.LayoutParams posterSize=new LinearLayout.LayoutParams(dp(153),dp(226)); posterSize.setMargins(0,dp(24),0,dp(24)); posterSize.gravity=Gravity.START;
             body.addView(poster,posterSize); loadPoster(poster,data.optString("id")); savedPoster(poster,data);
             body.addView(text(caption(data)+"  "+data.optString("director"),15,MUTED));
             TextView description=text(cleanDescription(data.optString("description","")),16,TEXT); description.setTag("card-description"); body.addView(description);
@@ -1229,6 +1230,9 @@ public final class MainActivity extends Activity {
             if(!session.optString("key").isEmpty()) body.addView(button("Выйти из аккаунта",this::confirmLogout));
             else body.addView(button("Войти по приглашению",this::home));
         } catch(Exception e) { body.addView(button("Сбросить подключение",this::confirmLogout)); }
+        divider(); section("Обновления");
+        body.addView(text("MApp "+AppUpdates.version(this)+" · автоматическая проверка при открытии приложения",15,MUTED));
+        body.addView(button("Проверить обновления",()->AppUpdates.check(this,true)));
         divider(); section("Оформление");
         body.addView(button("Цвет фона",()->chooseColor("background_color",BG)));
         body.addView(button("Цвет кнопок",()->chooseColor("button_color",BUTTON)));
