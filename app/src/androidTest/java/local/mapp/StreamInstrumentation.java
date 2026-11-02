@@ -669,6 +669,89 @@ public final class StreamInstrumentation extends Instrumentation {
             if(player.getTime()<3000 || stats==null || stats.displayedPictures<5) throw new AssertionError("Local AVI prefix did not decode: time="+player.getTime());
         } finally { if(activity!=null) { var a=activity; runOnMainSync(a::finish); } context.getSharedPreferences("library",0).edit().putString("items",prior).commit(); target.delete(); }
     }
+    private void checkLargeCard040(Api api) throws Exception {
+        var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0);
+        boolean external=prefs.getBoolean("external_player",false), ask=prefs.getBoolean("ask_audio",false);
+        String component=prefs.getString("external_component","");
+        MainActivity activity=null; PlayerActivity playerActivity=null;
+        String mid="1ea5a5a915c02e3e6f69dfb1", rid="kinozal:1475843";
+        var launchMonitor=addMonitor(MainActivity.class.getName(),null,false);
+        try(var output=getUiAutomation().executeShellCommand("am start -n local.mapp/.MainActivity"); var input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(output)) { byte[] bytes=new byte[1024]; while(input.read(bytes)!=-1) { } }
+        activity=(MainActivity)waitForMonitorWithTimeout(launchMonitor,15000); removeMonitor(launchMonitor);
+        if(activity==null) throw new AssertionError("Phone must be unlocked for the test");
+        JSONObject card=api.request("GET","/v1/movies/"+mid,null);
+        // Force a state larger than Binder's limit even if the server cache changes.
+        card.put("state_stress","x".repeat(1100000));
+        JSONObject target=null; var works=card.getJSONArray("works");
+        for(int i=0;i<works.length();i++) {
+            JSONObject w=works.getJSONObject(i); if(w.optInt("season")!=1 || w.optInt("number")!=1) continue;
+            var sources=w.getJSONArray("sources"); for(int j=0;j<sources.length();j++) if(rid.equals(sources.getJSONObject(j).optString("release"))) target=w;
+        }
+        if(target==null) throw new AssertionError("Requested Game of Thrones release/episode absent");
+        final String episode=target.getString("id");
+        var current=MainActivity.class.getDeclaredField("currentMovie"); current.setAccessible(true);
+        var chosen=MainActivity.class.getDeclaredField("chosenFile"); chosen.setAccessible(true);
+        var screen=MainActivity.class.getDeclaredField("screen"); screen.setAccessible(true);
+        try {
+            prefs.edit().putBoolean("external_player",false).putBoolean("ask_audio",false).commit();
+            final MainActivity initial=activity;
+            runOnMainSync(()->{ try {
+                var row=MainActivity.class.getDeclaredMethod("movieRow",JSONObject.class,Runnable.class); row.setAccessible(true);
+                var view=(android.view.View)row.invoke(initial,new JSONObject().put("id",mid).put("title","Игра престолов").put("series",true), (Runnable)()->{});
+                if(find(view,v->v instanceof android.widget.TextView && "Сериал".contentEquals(((android.widget.TextView)v).getText()))==null) throw new AssertionError("Series search label missing");
+                var page=MainActivity.class.getDeclaredMethod("page",String.class,String.class); page.setAccessible(true); page.invoke(initial,"movie","Карточка фильма");
+                var release=MainActivity.class.getDeclaredField("preferredRelease"); release.setAccessible(true); release.set(initial,rid);
+                var work=MainActivity.class.getDeclaredField("preferredEpisode"); work.setAccessible(true); work.set(initial,episode);
+                var show=MainActivity.class.getDeclaredMethod("showMovie",JSONObject.class); show.setAccessible(true); show.invoke(initial,card);
+            } catch(Exception e) { throw new RuntimeException(e); } });
+            waitForIdleSync();
+            Bundle saved=new Bundle();
+            runOnMainSync(()->initial.onSaveInstanceState(saved));
+            android.os.Parcel parcel=android.os.Parcel.obtain();
+            try { parcel.writeBundle(saved); if(parcel.dataSize()>65536) throw new AssertionError("Oversized saved state: "+parcel.dataSize()); }
+            finally { parcel.recycle(); }
+            if(saved.containsKey("card") || saved.containsKey("pendingBatch")) throw new AssertionError("Large payload in Binder state");
+            if(ActivitySnapshot.read(context,saved.getString("snapshot")).getJSONObject("card").getString("state_stress").length()!=1100000) throw new AssertionError("Snapshot truncated");
+            var monitor=addMonitor(MainActivity.class.getName(),null,false);
+            runOnMainSync(initial::recreate);
+            activity=(MainActivity)waitForMonitorWithTimeout(monitor,15000); removeMonitor(monitor);
+            if(activity==null) throw new AssertionError("Recreation failed");
+            waitForIdleSync();
+            if(!mid.equals(((JSONObject)current.get(activity)).optString("id"))) throw new AssertionError("Recreation lost card");
+            if(!rid.equals(((JSONObject)chosen.get(activity)).optString("release"))) throw new AssertionError("Recreation lost selected source");
+            final MainActivity restored=activity;
+            var playerMonitor=addMonitor(PlayerActivity.class.getName(),null,false);
+            runOnMainSync(()->find(restored.getWindow().getDecorView(),v->"card-watch".equals(v.getTag())).performClick());
+            playerActivity=(PlayerActivity)waitForMonitorWithTimeout(playerMonitor,90000); removeMonitor(playerMonitor);
+            if(playerActivity==null) throw new AssertionError("Internal player did not open");
+            var playerField=PlayerActivity.class.getDeclaredField("player"); playerField.setAccessible(true);
+            var player=(org.videolan.libvlc.MediaPlayer)playerField.get(playerActivity);
+            long until=System.currentTimeMillis()+60000;
+            while(player.getTime()<5000 && System.currentTimeMillis()<until) Thread.sleep(200);
+            var media=player.getMedia(); var stats=media.getStats(); media.release();
+            if(player.getTime()<5000 || stats==null || stats.displayedPictures<5) throw new AssertionError("Internal video did not decode");
+            final PlayerActivity playing=playerActivity; runOnMainSync(playing::finish); playerActivity=null;
+            Thread.sleep(1500); waitForIdleSync();
+            if(!"movie".equals(screen.get(restored))) throw new AssertionError("Internal return lost card");
+            prefs.edit().putBoolean("external_player",true).putString("external_component","org.videolan.vlc/org.videolan.vlc.StartActivity").commit();
+            runOnMainSync(()->find(restored.getWindow().getDecorView(),v->"card-watch".equals(v.getTag())).performClick());
+            until=System.currentTimeMillis()+60000; boolean launched=false;
+            while(System.currentTimeMillis()<until) { var root=getUiAutomation().getRootInActiveWindow(); if(root!=null && "org.videolan.vlc".contentEquals(root.getPackageName())) { launched=true; break; } Thread.sleep(200); }
+            if(!launched) throw new AssertionError("External VLC did not open");
+            Thread.sleep(15000);
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"got040-external.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+            var root=getUiAutomation().getRootInActiveWindow();
+            if(root==null || !"org.videolan.vlc".contentEquals(root.getPackageName())) throw new AssertionError("External VLC exited unexpectedly");
+            getUiAutomation().performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK);
+            Thread.sleep(2000); waitForIdleSync();
+            if(!"movie".equals(screen.get(restored)) || restored.isDestroyed()) throw new AssertionError("External return lost activity");
+        } finally {
+            prefs.edit().putBoolean("external_player",external).putBoolean("ask_audio",ask).putString("external_component",component).commit();
+            if(playerActivity!=null) { final PlayerActivity p=playerActivity; runOnMainSync(p::finish); }
+            if(activity!=null && current.get(activity) instanceof JSONObject data) data.remove("state_stress");
+            // Leave the real card available for the user's follow-up checks.
+        }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -678,6 +761,10 @@ public final class StreamInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK,result); return;
             }
             Api api=new Api(context);
+            if(arguments!=null && arguments.containsKey("largeCard040")) {
+                checkLargeCard040(api); result.putString("stream","PASS: series label, small Binder state, large-card recreation, real GOT internal decoding and external VLC return");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("localAvi034")) {
                 checkLocalAvi034(api); result.putString("stream","PASS: incomplete AVI plays exclusively from saved prefix without remote tail/index");
                 finish(Activity.RESULT_OK,result); return;

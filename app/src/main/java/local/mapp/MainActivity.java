@@ -43,6 +43,7 @@ public final class MainActivity extends Activity {
     private boolean sourceLoading;
     private boolean folderPrompt, batchDownload;
     private String playingUri="";
+    private String snapshotId=UUID.randomUUID().toString();
     private final ArrayList<JSONObject> pendingBatch=new ArrayList<>();
     interface Job { JSONObject run() throws Exception; }
     interface Result { void accept(JSONObject data) throws Exception; }
@@ -50,10 +51,13 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); prefs=getSharedPreferences("settings",0);
         Diagnostics.init(this); Diagnostics.event("lifecycle","MainActivity created");
-        if(state!=null) { playingMovie=state.getString("playingMovie",""); playingEpisode=state.getString("playingEpisode",""); playingTorrent=state.getString("playingTorrent",""); playingFile=state.getInt("playingFile"); playingUri=state.getString("playingUri",""); try { if(state.containsKey("pendingDownload")) pendingDownload=new JSONObject(state.getString("pendingDownload")); JSONArray batch=new JSONArray(state.getString("pendingBatch","[]")); for(int i=0;i<batch.length();i++) pendingBatch.add(batch.getJSONObject(i)); } catch(Exception ignored) { } }
-        if(state!=null && state.getString("card")!=null) {
-            try { page("movie","Карточка фильма"); preferredRelease=state.getString("release",""); preferredEpisode=state.getString("episode",""); showMovie(new JSONObject(state.getString("card"))); }
+        JSONObject snapshot=new JSONObject();
+        if(state!=null) { snapshotId=state.getString("snapshot",snapshotId); snapshot=ActivitySnapshot.read(this,snapshotId); playingMovie=state.getString("playingMovie",""); playingEpisode=state.getString("playingEpisode",""); playingTorrent=state.getString("playingTorrent",""); playingFile=state.getInt("playingFile"); playingUri=state.getString("playingUri",""); pendingDownload=snapshot.optJSONObject("pendingDownload"); JSONArray batch=snapshot.optJSONArray("pendingBatch"); if(batch!=null) for(int i=0;i<batch.length();i++) pendingBatch.add(batch.optJSONObject(i)); }
+        if(state!=null && snapshot.optJSONObject("card")!=null) {
+            try { page("movie","Карточка фильма"); preferredRelease=state.getString("release",""); preferredEpisode=state.getString("episode",""); showMovie(snapshot.getJSONObject("card")); }
             catch(Exception e) { handle(getIntent()); }
+        } else if(state!=null && !state.getString("movieId","").isEmpty()) {
+            preferredRelease=state.getString("release",""); preferredEpisode=state.getString("episode",""); movie(state.getString("movieId"));
         } else handle(getIntent());
         if(!prefs.getBoolean("folder_prompted",false) && prefs.getString("folder","").isEmpty()) ui.post(()->{
             if(isFinishing() || folderPrompt) return; folderPrompt=true;
@@ -62,9 +66,13 @@ public final class MainActivity extends Activity {
         });
     }
     @Override protected void onSaveInstanceState(Bundle state) { super.onSaveInstanceState(state); state.putString("playingMovie",playingMovie); state.putString("playingEpisode",playingEpisode); state.putString("playingTorrent",playingTorrent); state.putInt("playingFile",playingFile);
-        if(screen.equals("movie") && currentMovie!=null) { state.putString("card",currentMovie.toString()); state.putString("release",selectedRelease); state.putString("episode",selectedEpisode); }
-        if(pendingDownload!=null) state.putString("pendingDownload",pendingDownload.toString());
-        state.putString("pendingBatch",new JSONArray(pendingBatch).toString()); state.putString("playingUri",playingUri);
+        JSONObject snapshot=new JSONObject();
+        try {
+            if(screen.equals("movie") && currentMovie!=null) { snapshot.put("card",currentMovie); state.putString("movieId",currentMovie.optString("id")); state.putString("release",selectedRelease); state.putString("episode",selectedEpisode); }
+            snapshot.put("pendingDownload",pendingDownload); snapshot.put("pendingBatch",new JSONArray(pendingBatch));
+            ActivitySnapshot.write(this,snapshotId,snapshot); state.putString("snapshot",snapshotId);
+        } catch(Exception error) { Diagnostics.event("state","Snapshot save failed: "+error.getClass().getSimpleName()); }
+        state.putString("playingUri",playingUri);
     }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handle(intent); }
     private void handle(Intent intent) {
@@ -245,7 +253,7 @@ public final class MainActivity extends Activity {
         savedPoster(image,item.optJSONObject("card"));
         LinearLayout info=new LinearLayout(this); info.setOrientation(LinearLayout.VERTICAL); info.setPadding(dp(14),0,0,0);
         TextView title=text(item.optString("title"),17,0xff29201a); title.setMaxLines(2); title.setEllipsize(TextUtils.TruncateAt.END); info.addView(title);
-        if(item.optBoolean("series") || !item.optString("episode").isEmpty()) { TextView episode=text(episodeLabel(item),14,ACCENT); episode.setMaxLines(1); episode.setEllipsize(TextUtils.TruncateAt.END); info.addView(episode); }
+        if(item.optBoolean("series") || !item.optString("episode").isEmpty()) { TextView episode=text(item.optBoolean("series") && !item.has("state") && item.optString("episode").isEmpty()?"Сериал":episodeLabel(item),14,ACCENT); episode.setMaxLines(1); episode.setEllipsize(TextUtils.TruncateAt.END); info.addView(episode); }
         info.addView(text(caption(item),13,0xff6e625a));
         TextView director=text(director(item),13,0xff6e625a); director.setTag("director"); director.setMaxLines(2); director.setEllipsize(TextUtils.TruncateAt.END); info.addView(director);
         if(item.has("state")) { TextView progress=text(stateLabel(item),13,ACCENT); progress.setTag(item.optString("id")); info.addView(progress); }
