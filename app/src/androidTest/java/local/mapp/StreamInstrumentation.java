@@ -931,10 +931,71 @@ public final class StreamInstrumentation extends Instrumentation {
             if(text.getSpans(0,1,android.text.style.ForegroundColorSpan.class)[0].getForegroundColor()!=0xff218739) throw new AssertionError("Fresh availability not green");
         } finally { MovieCache.remove(context,mid); runOnMainSync(activity::finish); }
     }
+    private void checkCard052() throws Exception {
+        var context=getTargetContext(); var api=new Api(context);
+        var movies=api.request("GET","/v1/search?q="+android.net.Uri.encode("Звездные войны")+"&live=false",null).getJSONArray("movies");
+        String mid="";
+        for(int i=0;i<movies.length();i++) { var movie=movies.getJSONObject(i); if(movie.optString("title").contains("Эпизод: 1, 2, 3")) { mid=movie.getString("id"); break; } }
+        if(mid.isEmpty()) throw new AssertionError("Screenshot collection not found");
+        var card=api.request("GET","/v1/movies/"+mid,null);
+        var works=card.getJSONArray("works");
+        if(works.length()<6) throw new AssertionError("Collection manifest incomplete");
+        for(int i=0;i<works.length();i++) report(WorkLabels.label(works.getJSONObject(i),false,i));
+        if(!WorkLabels.label(new JSONObject().put("name","parent/Episode_III_2005.mkv"),false,0).equals("3")) throw new AssertionError("Roman episode number lost");
+        if(WorkLabels.label(new JSONObject().put("name","folder/unknown.mkv"),true,0).contains("unknown")) throw new AssertionError("Raw filename leaked");
+        var activity=phoneActivity();
+        runOnMainSync(()->{ try {
+            var page=MainActivity.class.getDeclaredMethod("page",String.class,String.class); page.setAccessible(true); page.invoke(activity,"movie","Карточка фильма");
+            var show=MainActivity.class.getDeclaredMethod("showMovie",JSONObject.class); show.setAccessible(true); show.invoke(activity,card);
+        } catch(Exception e) { throw new RuntimeException(e); } }); waitForIdleSync();
+        var root=activity.getWindow().getDecorView();
+        if(find(root,v->v instanceof android.widget.TextView && ((android.widget.TextView)v).getText().toString().startsWith("Файл:"))!=null) throw new AssertionError("File selector still visible");
+        var spinner=(android.widget.Spinner)find(root,v->"episode-selector".equals(v.getTag()));
+        if(spinner==null) { find(root,v->{ if(v instanceof android.widget.TextView) report("VIEW "+v.getTag()+" "+((android.widget.TextView)v).getText()); return false; }); throw new AssertionError("Episode selector missing"); }
+        if(find(root,v->"file-season-selector".equals(v.getTag()))!=null) throw new AssertionError("Collection has a season selector");
+        for(int i=0;i<6;i++) if(!spinner.getItemAtPosition(i).toString().startsWith(String.valueOf(i+1))) throw new AssertionError("Collection is not ordered by episode");
+        runOnMainSync(()->spinner.setSelection(1)); waitForIdleSync();
+        var selected=MainActivity.class.getDeclaredField("chosenFile"); selected.setAccessible(true);
+        var actual=(JSONObject)selected.get(activity);
+        JSONObject second=null; for(int i=0;i<works.length();i++) if(WorkLabels.number(works.getJSONObject(i))==2) second=works.getJSONObject(i);
+        if(second==null) throw new AssertionError("Episode 2 missing");
+        boolean matched=false;
+        for(int j=0;j<works.length();j++) if(WorkLabels.number(works.getJSONObject(j))==2) {
+            var expected=works.getJSONObject(j).getJSONArray("sources");
+            for(int i=0;i<expected.length();i++) { var s=expected.getJSONObject(i); if(s.optString("torrent").equals(actual.optString("torrent")) && s.optInt("index")==actual.optInt("index")) matched=true; }
+        }
+        if(!matched) throw new AssertionError("Film selection points to wrong video");
+        var all=(android.widget.Button)find(root,v->"season-download".equals(v.getTag()));
+        if(all==null || all.getVisibility()!=android.view.View.VISIBLE || !all.isEnabled() || !all.getText().toString().equals("Скачать все")) throw new AssertionError("Download all unavailable");
+        var active=MainActivity.class.getDeclaredField("activeCard"); active.setAccessible(true); Object view=active.get(activity);
+        var batch=view.getClass().getDeclaredMethod("batchFiles"); batch.setAccessible(true);
+        var files=(java.util.ArrayList<JSONObject>)batch.invoke(view);
+        if(files.size()!=6) throw new AssertionError("Download all must contain six episodes: "+files.size());
+        var indices=new java.util.HashSet<Integer>();
+        for(var file:files) { if(!file.optString("torrent").equals(actual.optString("torrent")) || !file.optString("release").equals(actual.optString("release"))) throw new AssertionError("Batch mixed sources"); indices.add(file.getInt("index")); }
+        if(indices.size()!=6) throw new AssertionError("Duplicate episodes in batch");
+        var update=api.request("GET","/v1/app-update",null);
+        if(update.optLong("version_code")>AppUpdates.code(context)) throw new AssertionError("Newer update prevents no-update test");
+        var busyField=AppUpdates.class.getDeclaredField("busy"); busyField.setAccessible(true);
+        var busy=(java.util.concurrent.atomic.AtomicBoolean)busyField.get(null);
+        long deadline=System.currentTimeMillis()+60000;
+        while(busy.get() && System.currentTimeMillis()<deadline) Thread.sleep(100);
+        if(busy.get()) throw new AssertionError("Previous update check stuck");
+        var prefs=context.getSharedPreferences("updates",0); prefs.edit().putLong("checked",0).commit();
+        runOnMainSync(()->AppUpdates.check(activity,false));
+        deadline=System.currentTimeMillis()+60000;
+        while(busy.get() && System.currentTimeMillis()<deadline) Thread.sleep(100);
+        waitForIdleSync();
+        if(busy.get() || prefs.getLong("checked",0)==0) throw new AssertionError("Automatic update request did not succeed");
+        var window=getUiAutomation().getRootInActiveWindow();
+        if(window==null || !window.findAccessibilityNodeInfosByText("Установлена последняя версия").isEmpty()) throw new AssertionError("Automatic no-update dialog appeared");
+        report("PASS: real collection episodes 1-6 without seasons, download-all batch has six distinct videos from selected source, automatic no-update check is silent");
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
             var context=getTargetContext();
+            if(arguments!=null && arguments.containsKey("card052")) { checkCard052(); result.putString("stream","PASS card052"); finish(Activity.RESULT_OK,result); return; }
             if(arguments!=null && arguments.containsKey("index051")) { checkIndex051(); result.putString("stream","PASS: persistent card cache, gray-to-green availability, source and episode selection preserved"); finish(Activity.RESULT_OK,result); return; }
             if(arguments!=null && arguments.containsKey("phone042")) {
                 phoneActivity();

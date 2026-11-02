@@ -42,6 +42,7 @@ final class AppUpdates {
                 if(!available) {
                     JSONObject saved=new JSONObject(prefs(context).getString("release","{}"));
                     if(saved.optLong("version_code")<=code(context)) { UpdateProvider.apk(context).delete(); prefs(context).edit().remove("release").apply(); }
+                    if(!manual) return;
                 }
                 activity.runOnUiThread(()->{
                     if(!alive(activity)) return;

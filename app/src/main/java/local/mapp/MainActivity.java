@@ -420,9 +420,10 @@ public final class MainActivity extends Activity {
             render(); signature=String.valueOf(data.optJSONArray("works"))+data.optJSONObject("complete_seasons"); tick.run();
         }
         boolean isSeries() { JSONArray rs=data.optJSONArray("releases"); if(rs!=null) for(int i=0;i<rs.length();i++) if(rs.optJSONObject(i).optBoolean("series")) return true; return false; }
+        boolean isCollection() { JSONArray works=data.optJSONArray("works"); return !isSeries() && works!=null && works.length()>1; }
         Spinner selector(LinearLayout parent,String label,ArrayList<String> labels,int selected,java.util.function.IntConsumer choose) {
             LinearLayout row=new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL);
-            row.addView(text(label+":",17,TEXT)); Spinner spinner=new Spinner(MainActivity.this); spinner.setTag(label.equals("Серия")?"episode-selector":label.equals("Сезон")?"file-season-selector":"source-selector");
+            row.addView(text(label+":",17,TEXT)); Spinner spinner=new Spinner(MainActivity.this); spinner.setTag(label.equals("Серия") || label.equals("Эпизод")?"episode-selector":label.equals("Сезон")?"file-season-selector":"source-selector");
             spinner.setAdapter(new ArrayAdapter<>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,labels));
             row.addView(spinner,new LinearLayout.LayoutParams(0,-2,1)); parent.addView(row); spinner.setSelection(Math.max(0,selected));
             spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -451,12 +452,13 @@ public final class MainActivity extends Activity {
                 selector(selectors,"Сезон",labels,numbers.indexOf(season),n->{ if(season!=numbers.get(n)) { season=numbers.get(n); workId=""; render(); } });
             }
             seasonWorks.clear(); for(JSONObject w:all) if(!isSeries() || w.optInt("season",0)==season) seasonWorks.add(w);
+            if(isCollection()) seasonWorks=WorkLabels.collection(seasonWorks);
             if(seasonWorks.isEmpty()) { season=seasons.first(); render(); return; }
             int selected=0; ArrayList<String> labels=new ArrayList<>();
-            for(int i=0;i<seasonWorks.size();i++) { JSONObject w=seasonWorks.get(i); if(w.optString("id").equals(workId)) selected=i;
-                labels.add((w.isNull("number")?w.optString("name"):""+w.optInt("number"))+(w.optBoolean("last_watched")?" · последняя просмотренная":"")); }
+            for(int i=0;i<seasonWorks.size();i++) { JSONObject w=seasonWorks.get(i); if(WorkLabels.matches(w,workId)) selected=i;
+                labels.add(WorkLabels.label(w,isSeries(),i)+(w.optBoolean("last_watched")?" · последняя просмотренная":"")); }
             work=seasonWorks.get(selected); workId=work.optString("id"); preferredEpisode=workId;
-            if(isSeries() || seasonWorks.size()>1) selector(selectors,isSeries()?"Серия":"Файл",labels,selected,n->{ String id=seasonWorks.get(n).optString("id"); if(!id.equals(workId)) { workId=id; render(); } });
+            if(isSeries() || seasonWorks.size()>1) selector(selectors,isSeries()?"Серия":"Эпизод",labels,selected,n->{ String id=seasonWorks.get(n).optString("id"); if(!id.equals(workId)) { workId=id; render(); } });
             renderSources();
         }
         JSONObject release(String id) { JSONArray rs=data.optJSONArray("releases"); if(rs!=null) for(int i=0;i<rs.length();i++) if(id.equals(rs.optJSONObject(i).optString("id"))) return rs.optJSONObject(i); return null; }
@@ -491,7 +493,7 @@ public final class MainActivity extends Activity {
         }
         void select(JSONObject s) {
             source=s; releaseId=s.optString("release"); release=release(releaseId); selectedRelease=releaseId; preferredRelease=releaseId;
-            chosenTorrent=s.optString("torrent"); selectedTorrent=chosenTorrent; selectedFile=s.optInt("index"); selectedEpisode=workId; selectedSeries=isSeries();
+            chosenTorrent=s.optString("torrent"); selectedTorrent=chosenTorrent; selectedFile=s.optInt("index"); selectedEpisode=s.optString("episode",workId); selectedSeries=isSeries();
             try { chosenFile=new JSONObject(s.toString()).put("position",WatchState.position(MainActivity.this,data.optString("id"),workId,chosenTorrent,selectedFile,isSeries()?work.optLong("position"):data.optLong("position"))); } catch(Exception ignored) { }
             sourceSelection++; watch.setTag("card-watch"); download.setTag("card-download");
             details.setText(release==null?"":release.optString("release_title")); update();
@@ -510,6 +512,7 @@ public final class MainActivity extends Activity {
             return null;
         }
         boolean completeSeason() {
+            if(isCollection()) return !batchFiles().isEmpty();
             JSONObject complete=data.optJSONObject("complete_seasons"); JSONArray seasons=complete==null?null:complete.optJSONArray(releaseId);
             if(seasons!=null) for(int i=0;i<seasons.length();i++) if(seasons.optInt(i)==season) return true;
             return false;
@@ -527,7 +530,8 @@ public final class MainActivity extends Activity {
             }
             if(source!=null) status.setText(local==null?(data.optBoolean("indexing")?"Индексируем остальные источники…":""):stateLabel(local)+(localReady(local)?"":" · нужен индекс и буфер: "+prefs.getInt("download_percent",10)+" %, "+prefs.getInt("startup_seconds",180)/60+" мин"));
             seasonDownload.setEnabled(source!=null && completeSeason());
-            seasonDownload.setVisibility(isSeries()?View.VISIBLE:View.GONE); seasonDivider.setVisibility(isSeries()?View.VISIBLE:View.GONE);
+            seasonDownload.setText(isCollection()?"Скачать все":"Скачать сезон");
+            seasonDownload.setVisibility(isSeries() || isCollection()?View.VISIBLE:View.GONE); seasonDivider.setVisibility(isSeries() || isCollection()?View.VISIBLE:View.GONE);
             if(sourceAdapter!=null) sourceAdapter.notifyDataSetChanged();
             if(source==null && !data.optBoolean("indexing",true)) status.setText("Для выбранного произведения пока нет проиндексированных источников.");
             status.setVisibility(status.getText().length()==0?View.GONE:View.VISIBLE);
@@ -547,10 +551,21 @@ public final class MainActivity extends Activity {
             }
             saveFile(source.optString("torrent"),chosenFile);
         }
+        ArrayList<JSONObject> batchFiles() {
+            ArrayList<JSONObject> files=new ArrayList<>();
+            if(source==null) return files;
+            for(JSONObject w:seasonWorks) {
+                JSONObject found=null; JSONArray ss=w.optJSONArray("sources");
+                if(ss!=null) for(int i=0;i<ss.length();i++) { JSONObject s=ss.optJSONObject(i); if(releaseId.equals(s.optString("release")) && source.optString("torrent").equals(s.optString("torrent"))) { found=s; break; } }
+                if(found==null) return new ArrayList<>();
+                files.add(found);
+            }
+            return files;
+        }
         void seasonDownload() {
             if(!completeSeason() || release==null) return;
-            ArrayList<JSONObject> files=new ArrayList<>();
-            for(JSONObject w:seasonWorks) { JSONArray ss=w.optJSONArray("sources"); if(ss!=null) for(int i=0;i<ss.length();i++) { JSONObject s=ss.optJSONObject(i); if(releaseId.equals(s.optString("release"))) { files.add(s); break; } } }
+            ArrayList<JSONObject> files=batchFiles();
+            if(files.isEmpty()) return;
             saveBatch(source.optString("torrent"),files,release);
         }
         void merge(JSONObject result) throws Exception {
@@ -1117,7 +1132,7 @@ public final class MainActivity extends Activity {
     }
     private void saveBatch(String torrent,ArrayList<JSONObject> files,JSONObject release) {
         if(!pendingBatch.isEmpty()) return;
-        selectedRelease=release.optString("id"); selectedSeries=true; batchDownload=true;
+        selectedRelease=release.optString("id"); selectedSeries=release.optBoolean("series"); batchDownload=true;
         try { for(JSONObject file:files) saveFile(torrent,file); } finally { batchDownload=false; }
         if(pendingBatch.isEmpty()) { Toast.makeText(this,"Эти серии уже добавлены",Toast.LENGTH_SHORT).show(); return; }
         if(prefs.getBoolean("ask_path",false) || prefs.getString("folder","").isEmpty()) pickFolder(104);
