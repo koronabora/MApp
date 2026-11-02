@@ -110,6 +110,7 @@ public final class MainActivity extends Activity {
         bar.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
         Button navigation=button(name.equals("home")?"Настройки":"Назад",()->{ if(name.equals("home")) settings(); else back(); });
         bar.addView(navigation,new LinearLayout.LayoutParams(name.equals("home")?homeButtonWidth():-2,-2)); root.addView(bar);
+        if(name.equals("movie")) { View line=new View(this); line.setTag("fixed-card-divider"); line.setBackgroundColor(0xffd8d8d2); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(1)); p.setMargins(0,dp(10),0,dp(10)); root.addView(line,p); }
         ScrollView scroll=new ScrollView(this); scroll.setFillViewport(true);
         body=new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(body); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1)); setContentView(root);
@@ -295,6 +296,7 @@ public final class MainActivity extends Activity {
                 }
                     android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options(); options.inJustDecodeBounds=true;
                     android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
+                    if(path.contains("/screenshots/") && (options.outWidth<320 || options.outHeight<180 || options.outWidth<options.outHeight || options.outWidth>options.outHeight*2.5)) { ui.post(()->{ if(path.equals(image.getTag())) image.setVisibility(View.GONE); }); return; }
                     if(path.endsWith("/poster") && (options.outWidth<180 || options.outHeight<240 || options.outWidth>options.outHeight*1.35)) { ui.post(()->{ if(path.equals(image.getTag())) image.setVisibility(View.GONE); }); return; }
                     options.inSampleSize=Math.max(1,Math.max(options.outWidth,options.outHeight)/600); options.inJustDecodeBounds=false;
                     var bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
@@ -376,13 +378,14 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams posterSize=new LinearLayout.LayoutParams(dp(118),dp(174)); posterSize.setMargins(0,dp(24),0,dp(24)); posterSize.gravity=Gravity.START;
             body.addView(poster,posterSize); loadPoster(poster,data.optString("id")); savedPoster(poster,data);
             body.addView(text(caption(data)+"  "+data.optString("director"),15,MUTED));
-            body.addView(text(data.optString("description",""),16,TEXT));
+            body.addView(text(cleanDescription(data.optString("description","")),16,TEXT));
             selectors.setOrientation(LinearLayout.VERTICAL); sources.setOrientation(LinearLayout.VERTICAL);
-            body.addView(selectors); body.addView(sources); body.addView(watch); body.addView(download); body.addView(status);
+            body.addView(selectors); body.addView(sources);
+            body.addView(details); body.addView(mediaInfo);
+            HorizontalScrollView screenshots=new HorizontalScrollView(MainActivity.this); screenshots.setHorizontalScrollBarEnabled(false); screenshots.addView(frames); body.addView(screenshots);
+            body.addView(watch); body.addView(download); status.setTag("download-status"); status.setGravity(Gravity.CENTER); body.addView(status,new LinearLayout.LayoutParams(-1,-2));
             watch.setTag("card-watch"); download.setTag("card-download"); seasonDownload.setTag("season-download");
             if(isSeries()) { divider(); body.addView(seasonDownload); }
-            body.addView(details);
-            body.addView(mediaInfo); HorizontalScrollView screenshots=new HorizontalScrollView(MainActivity.this); screenshots.setHorizontalScrollBarEnabled(false); screenshots.addView(frames); body.addView(screenshots);
             render(); signature=String.valueOf(data.optJSONArray("works"))+data.optJSONObject("complete_seasons"); tick.run();
         }
         boolean isSeries() { JSONArray rs=data.optJSONArray("releases"); if(rs!=null) for(int i=0;i<rs.length();i++) if(rs.optJSONObject(i).optBoolean("series")) return true; return false; }
@@ -429,7 +432,7 @@ public final class MainActivity extends Activity {
         String label(JSONObject s) {
             JSONObject r=release(s.optString("release")); if(r==null) return "Источник недоступен";
             JSONObject local=local(s); String arrow=local!=null && DownloadService.queued.contains(local.optString("id"))?" ↓":"";
-            return resolution(r)+" · "+r.optString("size")+" · "+r.optString("provider")+arrow;
+            return "●  "+resolution(r)+" · "+r.optString("size")+arrow;
         }
         void renderSources() {
             sources.removeAllViews(); JSONArray list=work.optJSONArray("sources");
@@ -442,8 +445,9 @@ public final class MainActivity extends Activity {
             select(list.optJSONObject(selected));
             Spinner spinner=selector(sources,"Источник",labels,selected,n->{ JSONObject s=list.optJSONObject(n); if(source!=s) select(s); });
             sourceAdapter=new ArrayAdapter<String>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,labels) {
-                @Override public View getView(int n,View v,ViewGroup p) { View row=super.getView(n,v,p); ((TextView)row).setText(label(list.optJSONObject(n))); return row; }
-                @Override public View getDropDownView(int n,View v,ViewGroup p) { View row=super.getDropDownView(n,v,p); ((TextView)row).setText(label(list.optJSONObject(n))); return row; }
+                private View tint(View row,int n) { JSONObject r=release(list.optJSONObject(n).optString("release")); int seeds=r==null?0:r.optInt("seeds"); android.text.SpannableString value=new android.text.SpannableString(label(list.optJSONObject(n))); value.setSpan(new android.text.style.ForegroundColorSpan(seeds>=10?0xff218739:seeds>=5?0xffe78016:seeds>0?0xffcf3030:Color.BLACK),0,1,0); ((TextView)row).setText(value); return row; }
+                @Override public View getView(int n,View v,ViewGroup p) { View row=tint(super.getView(n,v,p),n); ((TextView)row).setTextColor(TEXT); return row; }
+                @Override public View getDropDownView(int n,View v,ViewGroup p) { return tint(super.getDropDownView(n,v,p),n); }
             }; spinner.setAdapter(sourceAdapter); spinner.setSelection(selected);
         }
         void select(JSONObject s) {
@@ -451,8 +455,9 @@ public final class MainActivity extends Activity {
             chosenTorrent=s.optString("torrent"); selectedTorrent=chosenTorrent; selectedFile=s.optInt("index"); selectedEpisode=workId; selectedSeries=isSeries();
             try { chosenFile=new JSONObject(s.toString()).put("position",WatchState.position(MainActivity.this,data.optString("id"),workId,chosenTorrent,selectedFile,isSeries()?work.optLong("position"):data.optLong("position"))); } catch(Exception ignored) { }
             sourceSelection++; watch.setTag("card-watch"); download.setTag("card-download");
-            details.setText(release==null?"":release.optString("release_title")); update();
-            mediaInfo.setText(release==null?"":release.optString("audio"));
+            details.setText(release==null?"":release.optString("release_title")+(release.optBoolean("swarm_stale")?"\nНе удалось обновить число раздающих. Показаны сохранённые данные.":"")); update();
+            mediaInfo.setGravity(Gravity.CENTER);
+            mediaInfo.setText(release==null?"":release.optString("audio").isEmpty()?"Дорожки и субтитры доступны в меню плеера":release.optString("audio"));
             frames.removeAllViews();
             if(release!=null && !releaseId.startsWith("saved:")) for(int i=0;i<3;i++) {
                 ImageView frame=new ImageView(MainActivity.this); frame.setVisibility(View.GONE); frame.setContentDescription("Скриншот источника "+(i+1));
@@ -471,10 +476,13 @@ public final class MainActivity extends Activity {
             return false;
         }
         void update() {
-            JSONObject local=local(source); boolean busy=Boolean.TRUE.equals(watch.getTag()) || Boolean.TRUE.equals(download.getTag());
-            if(!busy) {
+            JSONObject local=local(source);
+            if(local!=null && Boolean.TRUE.equals(watch.getTag())) { sourceSelection++; watch.setTag("card-watch"); }
+            if(!Boolean.TRUE.equals(watch.getTag())) {
                 watch.setText(local!=null?"Просмотр":chosenFile!=null && chosenFile.optLong("position")>0?"Продолжить просмотр":"Просмотр");
                 watch.setEnabled(source!=null && (local==null || localReady(local)));
+            }
+            if(!Boolean.TRUE.equals(download.getTag())) {
                 boolean active=local!=null && DownloadService.queued.contains(local.optString("id"));
                 download.setText(active?"Остановить скачивание":"Скачать"); download.setEnabled(source!=null && (local==null || !local.optString("state").equals("complete")));
             }
@@ -521,6 +529,11 @@ public final class MainActivity extends Activity {
         }};
     }
     private String resolution(JSONObject release) { String value=release.optString("resolution"); return value.isEmpty() || value.toLowerCase(Locale.ROOT).contains("не указано")?"N\\A":value; }
+    static String cleanDescription(String value) {
+        for(int n=0;n<3 && value.matches("(?s).*(?:<[^>]+>|&(?:lt|gt|amp|quot|#\\d+);).*" );n++) value=android.text.Html.fromHtml(value,android.text.Html.FROM_HTML_MODE_LEGACY).toString();
+        if(value.toLowerCase(Locale.ROOT).contains("uploader:")) return "";
+        return value.trim();
+    }
     private String caption(JSONObject item) { return item.optString("year")+(item.optBoolean("animated") && item.optBoolean("series")?" · Мульт.":""); }
     private void legacyShowMovie(JSONObject data) throws Exception {
         generation++; chosenFile=null; chosenTorrent=""; selectedEpisode="";
@@ -845,7 +858,7 @@ public final class MainActivity extends Activity {
                     Button watch=button("Буферизация…",()->{}); body.addView(watch); buffer(parts[3],file,watch,System.currentTimeMillis());
                 } catch(Exception e) { error(e); } }
                 default -> new AlertDialog.Builder(this).setMessage("Удалить "+item.optString("name")+"?").setNegativeButton("Отмена",null).setPositiveButton("Удалить",(dialog,which)->{
-                    try { if(DownloadService.queued.contains(item.optString("id"))) DownloadService.cancelled.add(item.optString("id")); else FolderLibrary.remove(this,item); library(); } catch(Exception e) { error(e); }
+                    try { DownloadService.delete(this,item); library(); } catch(Exception e) { error(e); }
                 }).show();
             }
         }).show();
@@ -903,7 +916,8 @@ public final class MainActivity extends Activity {
         int seconds=prefs.getInt("buffer",15);
         long position=file.has("episode")?file.optLong("position"):currentMovie.optLong("position");
         task(()->request("GET","/v1/torrents/"+torrent+"?file="+file.getInt("index")+"&buffer="+seconds+"&position="+position,null),status->{
-            if(selection!=sourceSelection || choice!=chosenFile) { button.setTag(null); button.setEnabled(true); button.setText("Смотреть"); return; }
+            if(selection!=sourceSelection || choice!=chosenFile) return;
+            for(JSONObject saved:matchingSaved(currentMovie)) if(saved.optString("path").equals("/v1/torrents/"+torrent+"/files/"+file.optInt("index"))) { sourceSelection++; button.setTag("card-watch"); button.setText("Просмотр"); button.setEnabled(localReady(saved)); return; }
             Diagnostics.event("buffer","ready="+status.optBoolean("ready")+" percent="+status.optInt("buffer_percent")+" missing="+status.optLong("buffer_missing_bytes")+" position="+position);
             if(!status.isNull("error") && !status.optString("error").isEmpty()) {
                 button.setTag(null); button.setEnabled(true); button.setText("Повторить"); notice(status.getString("error")); return;
@@ -919,7 +933,6 @@ public final class MainActivity extends Activity {
             button.setText((status.isNull("media")?"Получаем метаданные и индекс…":"Буферизация")+" • "+status.optInt("buffer_percent")+"%"+(status.isNull("buffer_eta")?" • ожидаем данные":" • примерно "+status.optInt("buffer_eta")+" с"));
             int version=generation; ui.postDelayed(()->{ if(version==generation) {
                 if(selection==sourceSelection && choice==chosenFile) buffer(torrent,file,button,started);
-                else { button.setTag(null); button.setEnabled(true); button.setText("Смотреть"); }
             } },1500);
         });
     }
@@ -1099,7 +1112,7 @@ public final class MainActivity extends Activity {
             ImageButton delete=new ImageButton(this); delete.setImageResource(R.drawable.trash); delete.setContentDescription("Удалить файл"); delete.setBackground(rounded(BUTTON)); delete.setPadding(dp(12),dp(12),dp(12),dp(12));
             delete.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Удалить файл?").setMessage(item.optString("title")+"\n"+episodeLabel(item))
                 .setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,n)->{
-                    task(()->{ if(DownloadService.queued.contains(item.optString("id"))) DownloadService.cancelled.add(item.optString("id")); else FolderLibrary.remove(this,item); return new JSONObject(); },r->library());
+                    task(()->{ DownloadService.delete(this,item); return new JSONObject(); },r->library());
                 }).show());
             LinearLayout.LayoutParams fixed=new LinearLayout.LayoutParams(dp(48),dp(48)); fixed.leftMargin=dp(8); row.addView(delete,fixed); body.addView(row);
         }
@@ -1127,8 +1140,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Удалить сохранённое?").setMessage(item.optString("title")+"\nФайлов: "+files.size())
             .setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,n)->{
                 task(()->{ for(JSONObject file:files) {
-                    if(DownloadService.queued.contains(file.optString("id"))) DownloadService.cancelled.add(file.optString("id"));
-                    else FolderLibrary.remove(this,file);
+                    DownloadService.delete(this,file);
                 } return new JSONObject(); },result->library());
             }).show();
     }

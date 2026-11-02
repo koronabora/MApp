@@ -21,6 +21,7 @@ final class Library {
         c.getSharedPreferences("library",0).edit().putString("items",result.toString()).commit();
     }
     static synchronized void downloadState(Context c,JSONObject item) {
+        if(DownloadService.cancelled.contains(item.optString("id"))) return;
         JSONArray current=all(c);
         for(int i=0;i<current.length();i++) { JSONObject prior=current.optJSONObject(i); if(prior.optString("id").equals(item.optString("id")))
             for(String field:new String[]{"position","duration","completed"}) if(prior.has(field)) try { item.put(field,prior.get(field)); } catch(Exception ignored) { }

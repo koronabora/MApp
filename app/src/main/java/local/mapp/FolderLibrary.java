@@ -14,6 +14,8 @@ final class FolderLibrary {
         return DocumentsContract.createDocument(context.getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree)),"video/*",name);
     }
     static void backup(Context context,JSONObject item) {
+        synchronized(Library.class) {
+        if(DownloadService.cancelled.contains(item.optString("id"))) return;
         try {
             Uri sidecar;
             if(item.optString("sidecar").isEmpty()) {
@@ -32,6 +34,7 @@ final class FolderLibrary {
                 if(out!=null) out.write(copy.toString().getBytes(StandardCharsets.UTF_8));
             }
         } catch(Exception ignored) { /* Video remains usable if its provider disallows sidecars. */ }
+        }
     }
     static int restore(Context context,Uri tree) throws Exception {
         int restored=scan(context,tree,DocumentsContract.getTreeDocumentId(tree),new HashSet<>());
@@ -102,7 +105,10 @@ final class FolderLibrary {
     }
     static void remove(Context context,JSONObject item) throws Exception {
         Uri uri=Uri.parse(item.getString("uri"));
-        if(DocumentsContract.isDocumentUri(context,uri)) DocumentsContract.deleteDocument(context.getContentResolver(),uri); else context.getContentResolver().delete(uri,null,null);
+        if(exists(context,item)) {
+            if(DocumentsContract.isDocumentUri(context,uri)) { if(!DocumentsContract.deleteDocument(context.getContentResolver(),uri)) throw new java.io.IOException("Не удалось удалить файл"); }
+            else if(context.getContentResolver().delete(uri,null,null)==0) throw new java.io.IOException("Не удалось удалить файл");
+        }
         if(!item.optString("sidecar").isEmpty()) try {
             Uri sidecar=Uri.parse(item.getString("sidecar"));
             if(DocumentsContract.isDocumentUri(context,sidecar)) DocumentsContract.deleteDocument(context.getContentResolver(),sidecar); else context.getContentResolver().delete(sidecar,null,null);

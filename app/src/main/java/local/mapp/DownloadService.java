@@ -18,6 +18,15 @@ public final class DownloadService extends Service {
     static final Set<String> cancelled=ConcurrentHashMap.newKeySet();
     static final Set<String> paused=ConcurrentHashMap.newKeySet();
     private volatile boolean stopped;
+    static void delete(Context context,JSONObject item) throws Exception {
+        synchronized(Library.class) {
+            String id=item.getString("id"); cancelled.add(id);
+            try {
+                for(int n=0;n<Library.all(context).length();n++) { JSONObject latest=Library.all(context).optJSONObject(n); if(id.equals(latest.optString("id"))) { item=latest; break; } }
+                FolderLibrary.remove(context,item);
+            } catch(Exception e) { cancelled.remove(id); throw e; }
+        }
+    }
     @Override public IBinder onBind(Intent i) { return null; }
     @Override public void onCreate() {
         super.onCreate();
@@ -42,6 +51,7 @@ public final class DownloadService extends Service {
     }
     private void download(JSONObject item) {
         try {
+            if(cancelled.contains(item.optString("id"))) return;
             Api api=new Api(this);
             if(!api.server.equals(item.getString("server"))) throw new IOException("Подключитесь к исходному серверу");
             if(!item.optString("release").isEmpty()) {
@@ -87,11 +97,7 @@ public final class DownloadService extends Service {
             try { item.put("state","paused").put("error",e.getMessage()); } catch(Exception ignored) { }
         }
         paused.remove(item.optString("id"));
-        if(cancelled.remove(item.optString("id"))) {
-            try {
-                FolderLibrary.remove(this,item);
-            } catch(Exception e) { try { item.put("state","paused").put("error","Не удалось удалить файл: "+e.getMessage()); Library.put(this,item); } catch(Exception ignored) { } }
-        } else { Library.downloadState(this,item); FolderLibrary.backup(this,item); }
+        if(!cancelled.contains(item.optString("id"))) { Library.downloadState(this,item); FolderLibrary.backup(this,item); }
     }
     @Override public void onTimeout(int startId,int fgsType) { stopped=true; stopSelf(); }
     @Override public void onDestroy() { stopped=true; worker.shutdownNow(); queued.clear(); super.onDestroy(); }
