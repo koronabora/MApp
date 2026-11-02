@@ -554,6 +554,10 @@ public final class StreamInstrumentation extends Instrumentation {
                     var watch=find(root,v->"card-watch".equals(v.getTag()));
                     int golden=(int)(activity.getResources().getDisplayMetrics().widthPixels/1.61803398875);
                     if(Math.abs(watch.getWidth()-golden)>1 || Math.abs(seasonButtonWidth(root)-golden)>1) throw new AssertionError("Card actions must use golden-ratio width");
+                    if(selection==1 && find(root,v->"download-status".equals(v.getTag())).getVisibility()!=android.view.View.GONE) throw new AssertionError("Empty status reserves blank space");
+                    var separator=find(root,v->"season-divider".equals(v.getTag()));
+                    var seasonAction=find(root,v->"season-download".equals(v.getTag()));
+                    if(seasonAction.getTop()-separator.getBottom()>5*activity.getResources().getDisplayMetrics().density) throw new AssertionError("Excess gap below season divider");
                     if(detail.getTop()>=watch.getTop()) throw new AssertionError("Release details below actions");
                     var seasonButton=find(root,v->"season-download".equals(v.getTag()));
                     if(seasonButton.isEnabled()!=(selection==0)) throw new AssertionError("Partial season source enabled");

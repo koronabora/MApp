@@ -369,6 +369,7 @@ public final class MainActivity extends Activity {
         final TextView mediaInfo=text("",14,MUTED);
         final LinearLayout frames=new LinearLayout(MainActivity.this);
         final Button watch=button("Просмотр",()->watch()), download=button("Скачать",()->download()), seasonDownload=button("Скачать сезон",()->seasonDownload());
+        final View seasonDivider=new View(MainActivity.this);
         JSONObject work, source, release;
         ArrayList<JSONObject> seasonWorks=new ArrayList<>();
         String workId=preferredEpisode, releaseId=preferredRelease, signature="";
@@ -389,7 +390,8 @@ public final class MainActivity extends Activity {
             body.addView(details); body.addView(mediaInfo);
             cardAction(watch); cardAction(download); status.setTag("download-status"); status.setGravity(Gravity.CENTER); body.addView(status,new LinearLayout.LayoutParams(-1,-2));
             watch.setTag("card-watch"); download.setTag("card-download"); seasonDownload.setTag("season-download");
-            if(isSeries()) { divider(); cardAction(seasonDownload); }
+            seasonDivider.setBackgroundColor(0xffd7e2db); seasonDivider.setTag("season-divider");
+            LinearLayout.LayoutParams separator=new LinearLayout.LayoutParams(-1,dp(1)); separator.setMargins(0,dp(8),0,dp(4)); body.addView(seasonDivider,separator); cardAction(seasonDownload);
             render(); signature=String.valueOf(data.optJSONArray("works"))+data.optJSONObject("complete_seasons"); tick.run();
         }
         boolean isSeries() { JSONArray rs=data.optJSONArray("releases"); if(rs!=null) for(int i=0;i<rs.length();i++) if(rs.optJSONObject(i).optBoolean("series")) return true; return false; }
@@ -492,8 +494,10 @@ public final class MainActivity extends Activity {
             }
             if(source!=null) status.setText(local==null?(data.optBoolean("indexing")?"Индексируем остальные источники…":""):stateLabel(local)+(localReady(local)?"":" · просмотр после "+prefs.getInt("download_percent",10)+" %"));
             seasonDownload.setEnabled(source!=null && completeSeason());
+            seasonDownload.setVisibility(isSeries()?View.VISIBLE:View.GONE); seasonDivider.setVisibility(isSeries()?View.VISIBLE:View.GONE);
             if(sourceAdapter!=null) sourceAdapter.notifyDataSetChanged();
             if(source==null && !data.optBoolean("indexing",true)) status.setText("Для выбранного произведения пока нет проиндексированных источников.");
+            status.setVisibility(status.getText().length()==0?View.GONE:View.VISIBLE);
         }
         void watch() {
             if(source==null) return; JSONObject local=local(source); if(local!=null) { playSaved(local); return; }
