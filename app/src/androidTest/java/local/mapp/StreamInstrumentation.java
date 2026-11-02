@@ -62,7 +62,8 @@ public final class StreamInstrumentation extends Instrumentation {
     }
     private void checkExternal033(Api api) throws Exception {
         var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0); boolean external=prefs.getBoolean("external_player",false); int buffer=prefs.getInt("buffer",15);
-        prefs.edit().putBoolean("external_player",true).putInt("buffer",5).commit();
+        String remembered=prefs.getString("external_component","");
+        prefs.edit().putBoolean("external_player",true).putInt("buffer",5).remove("external_component").commit();
         String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:2")).getString("id");
         JSONObject file=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files").getJSONObject(0);
         String mid=""; var movies=api.request("GET","/v1/search?q=MCore&live=false",null).getJSONArray("movies");
@@ -81,6 +82,8 @@ public final class StreamInstrumentation extends Instrumentation {
             long deadline=System.currentTimeMillis()+60000; boolean launched=false;
             while(System.currentTimeMillis()<deadline) { var root=getUiAutomation().getRootInActiveWindow(); if(root!=null && "org.videolan.vlc".contentEquals(root.getPackageName())) { launched=true; break; }
                 if(root!=null) for(var node:root.findAccessibilityNodeInfosByText("VLC")) { if(!node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) && node.getParent()!=null) node.getParent().performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK); }
+                if(root!=null) for(var node:root.findAccessibilityNodeInfosByText("Всегда открывать")) if(!node.isChecked()) node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
+                if(root!=null) for(var node:root.findAccessibilityNodeInfosByViewId("android:id/button1")) if(node.getText()!=null && node.getText().toString().equalsIgnoreCase("Открыть")) node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK);
                 Thread.sleep(200); }
             if(!launched) throw new AssertionError("External VLC did not launch");
             Thread.sleep(12000);
@@ -92,7 +95,13 @@ public final class StreamInstrumentation extends Instrumentation {
             if(position<=5000) throw new AssertionError("VLC did not return progress: "+position);
             var screen=MainActivity.class.getDeclaredField("screen"); screen.setAccessible(true);
             if(!"movie".equals(screen.get(activity))) throw new AssertionError("External return lost movie card");
-        } finally { prefs.edit().putBoolean("external_player",external).putInt("buffer",buffer).commit(); context.stopService(new android.content.Intent(context,PlaybackService.class)); runOnMainSync(activity::finish); }
+            if(!prefs.getString("external_component","").startsWith("org.videolan.vlc/")) throw new AssertionError("Always player not remembered");
+            runOnMainSync(()->{ try { var play=MainActivity.class.getDeclaredMethod("play",android.net.Uri.class,String.class,long.class); play.setAccessible(true); play.invoke(activity,uri,movie,5000L); } catch(Exception e) { throw new RuntimeException(e); } });
+            deadline=System.currentTimeMillis()+60000; launched=false;
+            while(System.currentTimeMillis()<deadline) { var root=getUiAutomation().getRootInActiveWindow(); if(root!=null && "org.videolan.vlc".contentEquals(root.getPackageName())) { launched=true; break; } Thread.sleep(200); }
+            if(!launched) throw new AssertionError("Remembered player required another chooser");
+            getUiAutomation().performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK);
+        } finally { prefs.edit().putBoolean("external_player",external).putInt("buffer",buffer).putString("external_component",remembered).commit(); context.stopService(new android.content.Intent(context,PlaybackService.class)); runOnMainSync(activity::finish); }
     }
     private void check033(Api api) throws Exception {
         var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0);
@@ -148,7 +157,7 @@ public final class StreamInstrumentation extends Instrumentation {
             deadline=System.currentTimeMillis()+30000; while(chosen.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
             Thread.sleep(1700); waitForIdleSync();
             var monitor=addMonitor(PlayerActivity.class.getName(),null,false);
-            runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Смотреть сохранённое")); if(watch==null) throw new AssertionError("Saved episode action missing"); watch.performClick(); });
+            runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Просмотр")); if(watch==null) throw new AssertionError("Saved episode action missing"); watch.performClick(); });
             var player=(PlayerActivity)waitForMonitorWithTimeout(monitor,15000); removeMonitor(monitor);
             if(player==null) throw new AssertionError("Saved episode opened a menu instead of playing");
             try { if("local.mapp.media".equals(player.getIntent().getData().getAuthority())) throw new AssertionError("Completed episode streamed instead of local file"); }
@@ -282,7 +291,9 @@ public final class StreamInstrumentation extends Instrumentation {
             });
             waitForIdleSync();
             selected=(JSONObject)chosen.get(activity);
-            if(selected.optLong("position")!=3000) throw new AssertionError("Episode positions mixed");
+            deadline=System.currentTimeMillis()+5000;
+            while(selected.optInt("index")!=0 && System.currentTimeMillis()<deadline) { Thread.sleep(100); selected=(JSONObject)chosen.get(activity); }
+            if(selected.optLong("position")!=3000) throw new AssertionError("Episode positions mixed: "+selected);
             var monitor=addMonitor(PlayerActivity.class.getName(),null,false);
             runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->v instanceof android.widget.Button && ((android.widget.Button)v).getText().toString().equals("Продолжить просмотр")); if(watch==null) throw new AssertionError("Resume button absent"); watch.performClick(); });
             var playerActivity=(PlayerActivity)waitForMonitorWithTimeout(monitor,30000); removeMonitor(monitor);
@@ -484,11 +495,134 @@ public final class StreamInstrumentation extends Instrumentation {
         } finally { context.getSharedPreferences("settings",0).edit().putBoolean("ask_audio",oldAsk).commit(); runOnMainSync(activity::finish); }
     }
     @Override public void onCreate(Bundle args) { arguments=args; super.onCreate(args); start(); }
+    private int actionCount(android.view.View view) {
+        int count=view instanceof android.widget.Button && ("card-watch".equals(view.getTag()) || "card-download".equals(view.getTag()))?1:0;
+        if(view instanceof android.view.ViewGroup group) for(int i=0;i<group.getChildCount();i++) count+=actionCount(group.getChildAt(i));
+        return count;
+    }
+    private void check034(Api api) throws Exception {
+        var context=getTargetContext(); String previous=Library.all(context).toString();
+        var prefs=context.getSharedPreferences("settings",0); int percent=prefs.getInt("download_percent",10); prefs.edit().putInt("download_percent",10).commit();
+        var target=java.io.File.createTempFile("local034", ".bin",context.getCacheDir());
+        byte[] prefix=new byte[512*1024]; new java.util.Random(34).nextBytes(prefix); java.nio.file.Files.write(target.toPath(),prefix);
+        var localUri=FolderLibrary.create(context,android.net.Uri.parse(prefs.getString("folder","")),"MApp-034-"+java.util.UUID.randomUUID()+".avi");
+        try(var out=context.getContentResolver().openOutputStream(localUri,"wt")) { out.write(prefix); }
+        String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:1")).getString("id");
+        org.json.JSONArray remoteFiles=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files");
+        long metadataDeadline=System.currentTimeMillis()+30000;
+        while(remoteFiles.length()==0 && System.currentTimeMillis()<metadataDeadline) { Thread.sleep(500); remoteFiles=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files"); }
+        var remote=remoteFiles.getJSONObject(0);
+        String path="/v1/torrents/"+key+"/files/"+remote.getInt("index");
+        JSONObject local=new JSONObject().put("id","check034").put("movie","check034").put("uri",localUri.toString())
+            .put("path",path).put("server",api.server).put("size",remote.getLong("size")).put("downloaded",prefix.length).put("state","paused").put("name","XviD.avi").put("episode","s001e0001").put("season",1).put("number",1).put("series",true).put("release","a");
+        Library.put(context,local);
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            try(var bridge=new PlaybackBridge(context,local)) {
+                var first=(java.net.HttpURLConnection)new java.net.URL(bridge.url()).openConnection(); first.setRequestProperty("Range","bytes=0-8191");
+                try(var in=first.getInputStream()) { if(!Arrays.equals(Api.read(in,8192),Arrays.copyOf(prefix,8192))) throw new AssertionError("Local prefix changed"); } finally { first.disconnect(); }
+                var missing=(java.net.HttpURLConnection)new java.net.URL(bridge.url()).openConnection(); missing.setReadTimeout(5000); missing.setRequestProperty("Range","bytes=524288-532479");
+                int count=0; try(var in=missing.getInputStream()) { byte[] bytes=new byte[8192]; int n; while((n=in.read(bytes))>0) count+=n; } catch(java.io.IOException expected) { } finally { missing.disconnect(); }
+                if(count!=0) throw new AssertionError("Unsaved bytes fetched from server");
+            }
+            JSONObject r1=new JSONObject().put("id","a").put("series",true).put("resolution","720p").put("size","1 GB").put("provider","local");
+            JSONObject r2=new JSONObject(r1.toString()).put("id","b").put("resolution","1080p");
+            JSONObject s1=new JSONObject().put("release","a").put("torrent",key).put("index",remote.getInt("index")).put("name","S01E01.mkv").put("size",remote.getLong("size")).put("episode","s001e0001").put("season",1).put("number",1);
+            JSONObject s2=new JSONObject(s1.toString()).put("release","b").put("torrent","other");
+            JSONObject work=new JSONObject().put("id","s001e0001").put("season",1).put("number",1).put("last_watched",true).put("sources",new org.json.JSONArray().put(s1).put(s2));
+            JSONObject card=new JSONObject().put("id","check034").put("title","Проверка карточки").put("releases",new org.json.JSONArray().put(r1).put(r2))
+                .put("works",new org.json.JSONArray().put(work)).put("complete_seasons",new JSONObject().put("a",new org.json.JSONArray().put(1)).put("b",new org.json.JSONArray())).put("indexing",false);
+            runOnMainSync(()->{ try { var page=MainActivity.class.getDeclaredMethod("page",String.class,String.class); page.setAccessible(true); page.invoke(activity,"movie","Карточка фильма");
+                var show=MainActivity.class.getDeclaredMethod("showMovie",JSONObject.class); show.setAccessible(true); show.invoke(activity,card);
+            } catch(Exception e) { throw new RuntimeException(e); } }); waitForIdleSync();
+            for(int n=0;n<6;n++) { final int selection=n%2;
+                runOnMainSync(()->((android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"source-selector".equals(v.getTag()))).setSelection(selection)); waitForIdleSync();
+                runOnMainSync(()->{ var root=activity.getWindow().getDecorView();
+                    if(actionCount(root)!=2) throw new AssertionError("Duplicate card actions");
+                    var seasonButton=find(root,v->"season-download".equals(v.getTag()));
+                    if(seasonButton.isEnabled()!=(selection==0)) throw new AssertionError("Partial season source enabled");
+                });
+            }
+            runOnMainSync(()->((android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"source-selector".equals(v.getTag()))).setSelection(0)); waitForIdleSync();
+            local.put("downloaded",local.getLong("size")*9/100); Library.put(context,local); Thread.sleep(2200);
+            runOnMainSync(()->{ var root=activity.getWindow().getDecorView(); var watch=(android.widget.Button)find(root,v->"card-watch".equals(v.getTag())); if(watch.isEnabled() || !watch.getText().toString().equals("Просмотр")) throw new AssertionError("9% must be disabled"); });
+            local.put("downloaded",(local.getLong("size")+9)/10); Library.put(context,local); Thread.sleep(2200);
+            runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->"card-watch".equals(v.getTag())); if(!watch.isEnabled()) throw new AssertionError("10% must enable playback"); });
+            DownloadService.queued.add("check034"); Thread.sleep(2200);
+            runOnMainSync(()->{ var download=(android.widget.Button)find(activity.getWindow().getDecorView(),v->"card-download".equals(v.getTag())); if(!download.getText().toString().equals("Остановить скачивание")) throw new AssertionError("Stop action missing"); download.performClick(); });
+            if(!DownloadService.paused.contains("check034") || !FolderLibrary.exists(context,local)) throw new AssertionError("Stop deleted file instead of pausing");
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"card034.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+        } finally {
+            runOnMainSync(activity::finish); DownloadService.queued.remove("check034"); DownloadService.paused.remove("check034"); target.delete();
+            android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),localUri);
+            context.getSharedPreferences("library",0).edit().putString("items",previous).commit(); prefs.edit().putInt("download_percent",percent).commit();
+        }
+    }
+    private void checkPhoneDecoder() throws Exception {
+        var context=getTargetContext(); JSONObject item=null;
+        var items=Library.all(context);
+        for(int i=0;i<items.length();i++) {
+            var row=items.getJSONObject(i);
+            if(row.optString("name").equals(arguments.getString("phoneDecoder")) && row.optString("state").equals("complete")) { item=row; break; }
+        }
+        if(item==null) throw new AssertionError("Requested completed file not found");
+        var uri=android.net.Uri.parse(item.getString("uri"));
+        if(!DecoderPolicy.software(context,DecoderPolicy.name(context,uri))) throw new AssertionError("Xvid software policy not selected");
+        // No movie/saved_uri extras: diagnostic playback never updates the user's history.
+        var activity=(PlayerActivity)startActivitySync(new android.content.Intent(context,PlayerActivity.class).setData(uri)
+            .putExtra("position",55000L).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            var field=PlayerActivity.class.getDeclaredField("player"); field.setAccessible(true);
+            var player=(org.videolan.libvlc.MediaPlayer)field.get(activity);
+            long deadline=System.currentTimeMillis()+30000;
+            while(player!=null && player.getTime()<61000 && System.currentTimeMillis()<deadline) Thread.sleep(100);
+            if(player==null || player.getTime()<61000) throw new AssertionError("Saved AVI did not play past target scene");
+            var media=player.getMedia(); var stats=media.getStats(); media.release();
+            if(stats==null || stats.displayedPictures<10) throw new AssertionError("No decoded frames");
+            runOnMainSync(player::pause); waitForIdleSync();
+            try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"phone-embedded-034.png"))) {
+                getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);
+            }
+        } finally { runOnMainSync(activity::finish); }
+    }
+    private void checkLocalAvi034(Api api) throws Exception {
+        var context=getTargetContext(); String prior=Library.all(context).toString();
+        var target=java.io.File.createTempFile("prefix034", ".avi",context.getCacheDir()); PlayerActivity activity=null;
+        try {
+            String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:2")).getString("id");
+            var files=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files");
+            long until=System.currentTimeMillis()+30000; while(files.length()==0 && System.currentTimeMillis()<until) { Thread.sleep(500); files=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files"); }
+            JSONObject file=files.getJSONObject(0); String path="/v1/torrents/"+key+"/files/"+file.getInt("index");
+            try(var output=new java.io.FileOutputStream(target)) {
+                for(long offset=0;offset<24*1024*1024;offset+=4*1024*1024) output.write(VerifiedChunk.read(api,path,offset,offset+4*1024*1024-1,file.getLong("size")));
+            }
+            JSONObject item=new JSONObject().put("id","prefix034").put("uri",android.net.Uri.fromFile(target).toString()).put("path",path).put("server",api.server)
+                .put("size",file.getLong("size")).put("downloaded",target.length()).put("state","paused").put("name","Xvid-prefix.avi"); Library.put(context,item);
+            activity=(PlayerActivity)startActivitySync(new android.content.Intent(context,PlayerActivity.class).setData(android.net.Uri.fromFile(target)).putExtra("local_item",item.toString()).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+            var field=PlayerActivity.class.getDeclaredField("player"); field.setAccessible(true); var player=(org.videolan.libvlc.MediaPlayer)field.get(activity);
+            until=System.currentTimeMillis()+35000;
+            while(player.getTime()<3000 && System.currentTimeMillis()<until) Thread.sleep(200);
+            var media=player.getMedia(); var stats=media.getStats(); media.release();
+            if(player.getTime()<3000 || stats==null || stats.displayedPictures<5) throw new AssertionError("Local AVI prefix did not decode: time="+player.getTime());
+        } finally { if(activity!=null) { var a=activity; runOnMainSync(a::finish); } context.getSharedPreferences("library",0).edit().putString("items",prior).commit(); target.delete(); }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
             var context=getTargetContext();
+            if(arguments!=null && arguments.containsKey("phoneDecoder")) {
+                checkPhoneDecoder(); result.putString("stream","PASS: completed Xvid uses software policy and displays target scene; user history preserved");
+                finish(Activity.RESULT_OK,result); return;
+            }
             Api api=new Api(context);
+            if(arguments!=null && arguments.containsKey("localAvi034")) {
+                checkLocalAvi034(api); result.putString("stream","PASS: incomplete AVI plays exclusively from saved prefix without remote tail/index");
+                finish(Activity.RESULT_OK,result); return;
+            }
+            if(arguments!=null && arguments.containsKey("feedback034")) {
+                check034(api); result.putString("stream","PASS: local-only reads, exactly two actions after source switches, 9/10 percent gate, stop retains file, season completeness");
+                finish(Activity.RESULT_OK,result); return;
+            }
             integrityChecks();
             if(arguments!=null && arguments.containsKey("seasons033")) {
                 checkSeasons033(api); result.putString("stream","PASS: multi-season pack splits episodes, selected season downloads, all seasons queue without duplicate episodes");

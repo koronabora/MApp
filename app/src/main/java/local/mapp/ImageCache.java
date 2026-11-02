@@ -25,6 +25,7 @@ final class ImageCache {
         try {
             byte[] bytes=get(c,server,"/v1/movies/"+mid+"/poster"); if(bytes==null) return "";
             var bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length); if(bitmap==null) return "";
+            if(bitmap.getWidth()<180 || bitmap.getHeight()<240 || bitmap.getWidth()>bitmap.getHeight()*1.35) { bitmap.recycle(); return ""; }
             int width=Math.min(200,bitmap.getWidth()), height=Math.max(1,bitmap.getHeight()*width/bitmap.getWidth());
             var small=android.graphics.Bitmap.createScaledBitmap(bitmap,width,height,true); ByteArrayOutputStream out=new ByteArrayOutputStream(); small.compress(android.graphics.Bitmap.CompressFormat.JPEG,80,out);
             if(small!=bitmap) small.recycle(); bitmap.recycle();
