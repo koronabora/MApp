@@ -530,8 +530,8 @@ public final class MainActivity extends Activity {
         }
         final Runnable tick=new Runnable() { public void run() {
             if(!alive()) return; update();
-            if(!polling && polls++<60) {
-                polling=true; io.submit(()->{ try {
+            if(!polling && (polls<60 || data.optBoolean("indexing"))) {
+                polls++; polling=true; io.submit(()->{ try {
                     JSONObject result=request("GET","/v1/movies/"+data.optString("id")+"/sources",null);
                     ui.post(()->{ polling=false; if(!alive()) return; try {
                         String changed=result.optJSONArray("works").toString()+result.optJSONObject("complete_seasons");
@@ -541,7 +541,7 @@ public final class MainActivity extends Activity {
                     } catch(Exception e) { Diagnostics.event("catalog",e.getClass().getSimpleName()); } });
                 } catch(Exception e) { ui.post(()->polling=false); } });
             }
-            ui.postDelayed(this,2000);
+            ui.postDelayed(this,polls<60?2000:5000);
         }};
     }
     private String resolution(JSONObject release) { String value=release.optString("resolution"); return value.isEmpty() || value.toLowerCase(Locale.ROOT).contains("не указано")?"N\\A":value; }
