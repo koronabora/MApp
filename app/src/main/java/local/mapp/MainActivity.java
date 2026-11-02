@@ -441,20 +441,28 @@ public final class MainActivity extends Activity {
             return "●  "+resolution(r)+" · "+r.optString("size")+arrow;
         }
         void renderSources() {
-            sources.removeAllViews(); JSONArray list=work.optJSONArray("sources");
-            if(list==null || list.length()==0) { source=null; release=null; chosenFile=null; chosenTorrent=""; sourceAdapter=null; sourceSelection++; details.setText(""); mediaInfo.setText(""); frames.removeAllViews(); update(); return; }
+            sources.removeAllViews(); JSONArray available=work.optJSONArray("sources");
+            if(available==null || available.length()==0) { source=null; release=null; chosenFile=null; chosenTorrent=""; sourceAdapter=null; sourceSelection++; details.setText(""); mediaInfo.setText(""); frames.removeAllViews(); update(); return; }
+            ArrayList<JSONObject> list=new ArrayList<>();
+            for(int i=0;i<available.length();i++) list.add(available.optJSONObject(i));
+            // Sort by the release size shown in the selector, not an episode's file size.
+            list.sort((a,b)->Double.compare(sourceSize(b),sourceSize(a)));
             ArrayList<String> labels=new ArrayList<>(); int selected=0;
-            for(int i=0;i<list.length();i++) { JSONObject s=list.optJSONObject(i); labels.add(label(s)); JSONObject r=release(s.optString("release"));
+            for(int i=0;i<list.size();i++) { JSONObject s=list.get(i); labels.add(label(s)); JSONObject r=release(s.optString("release"));
                 if(releaseId.isEmpty() && r!=null && r.optString("resolution").equals(prefs.getString("quality","1080p"))) selected=i;
                 if(s.optString("release").equals(releaseId)) selected=i;
             }
-            select(list.optJSONObject(selected));
-            Spinner spinner=selector(sources,"Источник",labels,selected,n->{ JSONObject s=list.optJSONObject(n); if(source!=s) select(s); });
+            select(list.get(selected));
+            Spinner spinner=selector(sources,"Источник",labels,selected,n->{ JSONObject s=list.get(n); if(source!=s) select(s); });
             sourceAdapter=new ArrayAdapter<String>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,labels) {
-                private View tint(View row,int n) { JSONObject r=release(list.optJSONObject(n).optString("release")); int seeds=r==null?0:r.optInt("seeds"); android.text.SpannableString value=new android.text.SpannableString(label(list.optJSONObject(n))); value.setSpan(new android.text.style.ForegroundColorSpan(seeds>=10?0xff218739:seeds>=5?0xffe78016:seeds>0?0xffcf3030:Color.BLACK),0,1,0); ((TextView)row).setText(value); return row; }
+                private View tint(View row,int n) { JSONObject r=release(list.get(n).optString("release")); int seeds=r==null?0:r.optInt("seeds"); android.text.SpannableString value=new android.text.SpannableString(label(list.get(n))); value.setSpan(new android.text.style.ForegroundColorSpan(seeds>=10?0xff218739:seeds>=5?0xffe78016:seeds>0?0xffcf3030:Color.BLACK),0,1,0); ((TextView)row).setText(value); return row; }
                 @Override public View getView(int n,View v,ViewGroup p) { View row=tint(super.getView(n,v,p),n); ((TextView)row).setTextColor(TEXT); return row; }
                 @Override public View getDropDownView(int n,View v,ViewGroup p) { return tint(super.getDropDownView(n,v,p),n); }
             }; spinner.setAdapter(sourceAdapter); spinner.setSelection(selected);
+        }
+        double sourceSize(JSONObject s) {
+            JSONObject r=release(s.optString("release"));
+            return r==null?-1:displaySizeBytes(r.optString("size"));
         }
         void select(JSONObject s) {
             source=s; releaseId=s.optString("release"); release=release(releaseId); selectedRelease=releaseId; preferredRelease=releaseId;
@@ -537,6 +545,22 @@ public final class MainActivity extends Activity {
         }};
     }
     private String resolution(JSONObject release) { String value=release.optString("resolution"); return value.isEmpty() || value.toLowerCase(Locale.ROOT).contains("не указано")?"N\\A":value; }
+    static double displaySizeBytes(String value) {
+        String normalized=value.toUpperCase(Locale.ROOT).replace('\u00a0',' ').replace('\u202f',' ').trim();
+        java.util.regex.Matcher match=java.util.regex.Pattern.compile("^([0-9]+(?:[.,][0-9]+)?)\\s*([A-ZА-Я]*)$").matcher(normalized);
+        if(!match.matches()) return -1;
+        double amount=Double.parseDouble(match.group(1).replace(',','.'));
+        String unit=match.group(2);
+        int power=switch(unit) {
+            case "", "B", "Б" -> 0;
+            case "KB", "KIB", "КБ", "КИБ" -> 1;
+            case "MB", "MIB", "МБ", "МИБ" -> 2;
+            case "GB", "GIB", "ГБ", "ГИБ" -> 3;
+            case "TB", "TIB", "ТБ", "ТИБ" -> 4;
+            default -> -1;
+        };
+        return power<0?-1:amount*Math.pow(1024,power);
+    }
     static String cleanDescription(String value) {
         for(int n=0;n<3 && value.matches("(?s).*(?:<[^>]+>|&(?:lt|gt|amp|quot|#\\d+);).*" );n++) value=android.text.Html.fromHtml(value,android.text.Html.FROM_HTML_MODE_LEGACY).toString();
         if(value.toLowerCase(Locale.ROOT).contains("uploader:")) return "";
