@@ -107,6 +107,7 @@ public final class MainActivity extends Activity {
         });
         LinearLayout bar=new LinearLayout(this); bar.setGravity(Gravity.CENTER_VERTICAL);
         TextView heading=text(title,28,TEXT); heading.setTypeface(null,Typeface.BOLD);
+        if(name.equals("home")) { heading.setTextSize(32); heading.setTypeface(Typeface.create(getResources().getFont(R.font.manrope),700,false)); heading.setTag("home-heading"); }
         bar.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
         Button navigation=button(name.equals("home")?"Настройки":"Назад",()->{ if(name.equals("home")) settings(); else back(); });
         bar.addView(navigation,new LinearLayout.LayoutParams(name.equals("home")?homeButtonWidth():-2,-2)); root.addView(bar);
@@ -118,6 +119,9 @@ public final class MainActivity extends Activity {
     private void section(String name) { TextView h=text(name,21,TEXT); h.setTypeface(null,Typeface.BOLD); body.addView(h); }
     private void divider() { View v=new View(this); v.setBackgroundColor(0xffd7e2db); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(screen.equals("home")?2:1)); p.setMargins(0,dp(22),0,dp(16)); body.addView(v,p); }
     private int homeButtonWidth() { return Math.min(dp(124),(getResources().getDisplayMetrics().widthPixels-dp(44))/2); }
+    private void cardAction(Button action) {
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams((int)(getResources().getDisplayMetrics().widthPixels/1.61803398875),-2); p.gravity=Gravity.CENTER_HORIZONTAL; body.addView(action,p);
+    }
     private void notice(String message) { new AlertDialog.Builder(this).setMessage(message).setPositiveButton("Понятно",null).show(); }
     private void resetBusy(View view) {
         if(view instanceof Button && Boolean.TRUE.equals(view.getTag())) { view.setTag(null); view.setEnabled(true); ((Button)view).setText("Повторить"); }
@@ -201,8 +205,8 @@ public final class MainActivity extends Activity {
         LinearLayout recent=new LinearLayout(this); recent.setOrientation(LinearLayout.VERTICAL); body.addView(recent);
         task(()->request("GET","/v1/home",null),data->{
             View line=new View(this); line.setBackgroundColor(0xffd7e2db); LinearLayout.LayoutParams lineParams=new LinearLayout.LayoutParams(-1,dp(1)); lineParams.setMargins(0,dp(16),0,dp(8)); recent.addView(line,lineParams);
-            recent.addView(text("История поиска",18,TEXT)); JSONArray queries=data.getJSONArray("queries");
-            for(int i=0;i<queries.length();i++) { String q=queries.getString(i); TextView row=text(q,16,MUTED); row.setMinHeight(dp(48)); row.setOnClickListener(v->searchPage(q)); recent.addView(row); }
+            TextView historyHeading=text("История поиска",18,TEXT); historyHeading.setTypeface(null,Typeface.BOLD); recent.addView(historyHeading); JSONArray queries=data.getJSONArray("queries");
+            for(int i=0;i<queries.length();i++) { String q=queries.getString(i); TextView row=text(q,16,TEXT==Color.WHITE?0xffb8b8b8:0xff737373); row.setTag("search-history-entry"); row.setPadding(dp(14),dp(8),0,dp(8)); row.setMinHeight(dp(48)); row.setOnClickListener(v->searchPage(q)); recent.addView(row); }
             recent.setVisibility(input.length()==0?View.VISIBLE:View.GONE);
         });
         Runnable[] pending={null}; int[] sequence={0};
@@ -378,14 +382,14 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams posterSize=new LinearLayout.LayoutParams(dp(118),dp(174)); posterSize.setMargins(0,dp(24),0,dp(24)); posterSize.gravity=Gravity.START;
             body.addView(poster,posterSize); loadPoster(poster,data.optString("id")); savedPoster(poster,data);
             body.addView(text(caption(data)+"  "+data.optString("director"),15,MUTED));
-            body.addView(text(cleanDescription(data.optString("description","")),16,TEXT));
+            TextView description=text(cleanDescription(data.optString("description","")),16,TEXT); description.setTag("card-description"); body.addView(description);
+            HorizontalScrollView screenshots=new HorizontalScrollView(MainActivity.this); screenshots.setTag("card-screenshots"); screenshots.setHorizontalScrollBarEnabled(false); screenshots.addView(frames); body.addView(screenshots);
             selectors.setOrientation(LinearLayout.VERTICAL); sources.setOrientation(LinearLayout.VERTICAL);
             body.addView(selectors); body.addView(sources);
             body.addView(details); body.addView(mediaInfo);
-            HorizontalScrollView screenshots=new HorizontalScrollView(MainActivity.this); screenshots.setHorizontalScrollBarEnabled(false); screenshots.addView(frames); body.addView(screenshots);
-            body.addView(watch); body.addView(download); status.setTag("download-status"); status.setGravity(Gravity.CENTER); body.addView(status,new LinearLayout.LayoutParams(-1,-2));
+            cardAction(watch); cardAction(download); status.setTag("download-status"); status.setGravity(Gravity.CENTER); body.addView(status,new LinearLayout.LayoutParams(-1,-2));
             watch.setTag("card-watch"); download.setTag("card-download"); seasonDownload.setTag("season-download");
-            if(isSeries()) { divider(); body.addView(seasonDownload); }
+            if(isSeries()) { divider(); cardAction(seasonDownload); }
             render(); signature=String.valueOf(data.optJSONArray("works"))+data.optJSONObject("complete_seasons"); tick.run();
         }
         boolean isSeries() { JSONArray rs=data.optJSONArray("releases"); if(rs!=null) for(int i=0;i<rs.length();i++) if(rs.optJSONObject(i).optBoolean("series")) return true; return false; }
@@ -1090,7 +1094,7 @@ public final class MainActivity extends Activity {
     private String stateLabel(JSONObject item) {
         return switch(item.optString("state")) {
             case "complete" -> "Скачано";
-            case "paused" -> "Пауза · продолжить";
+            case "paused" -> "Пауза";
             default -> "Загрузка · "+(item.optLong("downloaded")*100/Math.max(1,item.optLong("size")))+" %";
         };
     }
@@ -1106,15 +1110,22 @@ public final class MainActivity extends Activity {
         items.sort(Comparator.comparing((JSONObject j)->j.optString("state").equals("complete")).thenComparing(j->j.optString("title"),String.CASE_INSENSITIVE_ORDER));
         if(items.isEmpty()) body.addView(text("Пока пусто. Скачайте фильм из его карточки. После переустановки выберите прежнюю папку в настройках.",16,MUTED));
         for(JSONObject item:items) {
-            LinearLayout row=(LinearLayout)movieRow(item,()->{ if(item.optString("state").equals("paused")) {
-                new AlertDialog.Builder(this).setItems(new String[]{"Смотреть","Продолжить загрузку"},(d,n)->{ if(n==0) playSaved(item); else { startForegroundService(new Intent(this,DownloadService.class).putExtra("item",item.toString())); library(); } }).show();
-            } else playSaved(item); });
+            LinearLayout row=(LinearLayout)movieRow(item,()->playSaved(latestSaved(item)));
+            LinearLayout actions=new LinearLayout(this); actions.setOrientation(LinearLayout.VERTICAL); actions.setGravity(Gravity.CENTER_HORIZONTAL);
             ImageButton delete=new ImageButton(this); delete.setImageResource(R.drawable.trash); delete.setContentDescription("Удалить файл"); delete.setBackground(rounded(BUTTON)); delete.setPadding(dp(12),dp(12),dp(12),dp(12));
             delete.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Удалить файл?").setMessage(item.optString("title")+"\n"+episodeLabel(item))
                 .setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,n)->{
                     task(()->{ DownloadService.delete(this,item); return new JSONObject(); },r->library());
                 }).show());
-            LinearLayout.LayoutParams fixed=new LinearLayout.LayoutParams(dp(48),dp(48)); fixed.leftMargin=dp(8); row.addView(delete,fixed); body.addView(row);
+            actions.addView(delete,new LinearLayout.LayoutParams(dp(48),dp(48)));
+            ImageButton transfer=new ImageButton(this); transfer.setTag("download-control:"+item.optString("id")); transfer.setImageTintList(android.content.res.ColorStateList.valueOf(contrast(BUTTON))); transfer.setBackground(rounded(BUTTON)); transfer.setPadding(dp(12),dp(12),dp(12),dp(12));
+            transfer.setOnClickListener(v->{ JSONObject latest=latestSaved(item); String id=latest.optString("id");
+                if(DownloadService.queued.contains(id)) DownloadService.paused.add(id);
+                else { DownloadService.paused.remove(id); startForegroundService(new Intent(this,DownloadService.class).putExtra("item",latest.toString())); }
+                updateTransferButton(transfer,latest);
+            });
+            LinearLayout.LayoutParams transferParams=new LinearLayout.LayoutParams(dp(48),dp(48)); transferParams.topMargin=dp(32); actions.addView(transfer,transferParams); updateTransferButton(transfer,item);
+            LinearLayout.LayoutParams fixed=new LinearLayout.LayoutParams(dp(48),-2); fixed.leftMargin=dp(16); row.addView(actions,fixed); body.addView(row);
         }
         int version=generation;
         Runnable refresh=new Runnable() { public void run() {
@@ -1129,8 +1140,17 @@ public final class MainActivity extends Activity {
         ui.postDelayed(refresh,1500);
     }
     private void updateDownloadLabels(View view,JSONObject item) {
+        if(view instanceof ImageButton && ("download-control:"+item.optString("id")).equals(view.getTag())) updateTransferButton((ImageButton)view,item);
         if(view instanceof TextView && item.optString("id").equals(view.getTag())) ((TextView)view).setText(stateLabel(item));
         if(view instanceof android.view.ViewGroup group) for(int i=0;i<group.getChildCount();i++) updateDownloadLabels(group.getChildAt(i),item);
+    }
+    private JSONObject latestSaved(JSONObject fallback) { JSONArray items=Library.all(this); for(int n=0;n<items.length();n++) if(items.optJSONObject(n).optString("id").equals(fallback.optString("id"))) return items.optJSONObject(n); return fallback; }
+    private void updateTransferButton(ImageButton button,JSONObject item) {
+        boolean complete=item.optString("state").equals("complete"), active=DownloadService.queued.contains(item.optString("id")), stopping=active && DownloadService.paused.contains(item.optString("id"));
+        button.setVisibility(complete?View.GONE:View.VISIBLE); button.setEnabled(!stopping);
+        button.setImageResource(active?R.drawable.player_pause:R.drawable.player_play_arrow);
+        button.setContentDescription(stopping?"Остановка загрузки…":active?"Приостановить загрузку":"Продолжить загрузку");
+        button.setAlpha(stopping?.5f:1f);
     }
     private void deleteSavedGroup(JSONObject item) {
         ArrayList<JSONObject> files=new ArrayList<>(); JSONArray all=Library.all(this);
