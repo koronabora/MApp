@@ -36,7 +36,7 @@ final class Diagnostics {
         init(c); c.getSharedPreferences("settings",0).edit().putBoolean("diagnostics",enabled).apply();
         worker.execute(()->{
             if(enabled) {
-                event("session","MApp 0.3.5 Android="+android.os.Build.VERSION.SDK_INT+" model="+android.os.Build.MODEL);
+                event("session","MApp 0.3.6 Android="+android.os.Build.VERSION.SDK_INT+" model="+android.os.Build.MODEL);
                 flush(); result.accept(uri.isEmpty()?"Не удалось создать лог в папке видео":"Логи записываются в MApp-debug.txt в папке видео");
             } else {
                 boolean failed=false; JSONArray retained=new JSONArray();

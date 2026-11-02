@@ -541,6 +541,10 @@ public final class StreamInstrumentation extends Instrumentation {
                 runOnMainSync(()->((android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"source-selector".equals(v.getTag()))).setSelection(selection)); waitForIdleSync();
                 runOnMainSync(()->{ var root=activity.getWindow().getDecorView();
                     if(actionCount(root)!=2) throw new AssertionError("Duplicate card actions");
+                    var screenshots=find(root,v->"card-screenshots".equals(v.getTag()));
+                    var description=find(root,v->"card-description".equals(v.getTag()));
+                    var content=(android.view.ViewGroup)screenshots.getParent();
+                    if(content.indexOfChild(screenshots)!=content.indexOfChild(description)+1) throw new AssertionError("Screenshots must directly follow description");
                     var line=find(root,v->"fixed-card-divider".equals(v.getTag()));
                     if(line==null || line.getParent() instanceof android.widget.ScrollView) throw new AssertionError("Fixed header divider missing");
                     var spinner=(android.widget.Spinner)find(root,v->"source-selector".equals(v.getTag()));
@@ -548,6 +552,8 @@ public final class StreamInstrumentation extends Instrumentation {
                     if(!label.getText().toString().startsWith("●") || label.getText().toString().contains("rutracker")) throw new AssertionError("Availability dot/tracker label regression");
                     var detail=find(root,v->v instanceof android.widget.TextView && "Release information".contentEquals(((android.widget.TextView)v).getText()));
                     var watch=find(root,v->"card-watch".equals(v.getTag()));
+                    int golden=(int)(activity.getResources().getDisplayMetrics().widthPixels/1.61803398875);
+                    if(Math.abs(watch.getWidth()-golden)>1 || Math.abs(seasonButtonWidth(root)-golden)>1) throw new AssertionError("Card actions must use golden-ratio width");
                     if(detail.getTop()>=watch.getTop()) throw new AssertionError("Release details below actions");
                     var seasonButton=find(root,v->"season-download".equals(v.getTag()));
                     if(seasonButton.isEnabled()!=(selection==0)) throw new AssertionError("Partial season source enabled");
@@ -566,6 +572,18 @@ public final class StreamInstrumentation extends Instrumentation {
             try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"card034.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
             runOnMainSync(()->{ var status=(android.widget.TextView)find(activity.getWindow().getDecorView(),v->"download-status".equals(v.getTag())); if(status==null || status.getGravity()!=android.view.Gravity.CENTER) throw new AssertionError("Download status not centered"); });
             local.put("folder",prefs.getString("folder","")).put("downloaded",0).put("state","queued"); Library.put(context,local); FolderLibrary.backup(context,local);
+            DownloadService.paused.remove("check034");
+            runOnMainSync(()->{ try { var method=MainActivity.class.getDeclaredMethod("library"); method.setAccessible(true); method.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } }); waitForIdleSync();
+            runOnMainSync(()->{
+                var button=(android.widget.ImageButton)find(activity.getWindow().getDecorView(),v->"download-control:check034".equals(v.getTag()));
+                if(button==null || !"Приостановить загрузку".contentEquals(button.getContentDescription())) throw new AssertionError("Separate pause action missing");
+                var column=(android.view.ViewGroup)button.getParent(); var delete=column.getChildAt(0);
+                if(button.getTop()-delete.getBottom()<30*activity.getResources().getDisplayMetrics().density) throw new AssertionError("Pause too close to delete");
+                button.performClick();
+                if(!DownloadService.paused.contains("check034")) throw new AssertionError("Pause action did not pause download");
+            });
+            DownloadService.queued.remove("check034"); local.put("state","paused"); Library.put(context,local); Thread.sleep(1700);
+            runOnMainSync(()->{ var button=find(activity.getWindow().getDecorView(),v->"download-control:check034".equals(v.getTag())); if(!button.isEnabled() || !"Продолжить загрузку".contentEquals(button.getContentDescription())) throw new AssertionError("Resume action missing after pause"); });
             DownloadService.delete(context,local);
             Library.downloadState(context,local); FolderLibrary.backup(context,local);
             if(FolderLibrary.exists(context,local)) throw new AssertionError("Queued download was not deleted immediately");
@@ -577,6 +595,7 @@ public final class StreamInstrumentation extends Instrumentation {
             context.getSharedPreferences("library",0).edit().putString("items",previous).commit(); prefs.edit().putInt("download_percent",percent).commit();
         }
     }
+    private int seasonButtonWidth(android.view.View root) { return find(root,v->"season-download".equals(v.getTag())).getWidth(); }
     private void checkPhoneDecoder() throws Exception {
         var context=getTargetContext(); JSONObject item=null;
         var items=Library.all(context);
@@ -609,6 +628,7 @@ public final class StreamInstrumentation extends Instrumentation {
         runOnMainSync(()->{ try {
             var show=PlayerActivity.class.getDeclaredMethod("showControls"); show.setAccessible(true); show.invoke(activity);
             var root=activity.getWindow().getDecorView();
+            if(find(root,v->v instanceof android.widget.TextView && "MApp".contentEquals(((android.widget.TextView)v).getText()))!=null) throw new AssertionError("Player toolbar still has app title");
             for(String label:new String[]{"Назад","Повернуть экран","Блокировка управления","Назад 10 секунд","Пауза / продолжить","Вперёд 10 секунд","Аудиодорожки","Субтитры","Дополнительно"}) {
                 var button=find(root,v->label.contentEquals(v.getContentDescription()==null?"":v.getContentDescription()));
                 if(!(button instanceof android.widget.ImageButton) || button.getWidth()!=button.getHeight()) throw new AssertionError("Inconsistent vector control: "+label);
