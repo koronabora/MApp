@@ -33,6 +33,16 @@ public final class StreamInstrumentation extends Instrumentation {
         if(!denied || attempts[0]!=3) throw new AssertionError("Retry limit failed");
     }
     private Bundle arguments;
+    private MainActivity phoneMain;
+    private void report(String value) { Bundle message=new Bundle(); message.putString("stream",value+"\n"); sendStatus(1,message); }
+    private MainActivity phoneActivity() throws Exception {
+        if(phoneMain!=null && !phoneMain.isFinishing() && !phoneMain.isDestroyed()) return phoneMain;
+        var monitor=addMonitor(MainActivity.class.getName(),null,false);
+        try(var output=getUiAutomation().executeShellCommand("am start -n local.mapp/.MainActivity"); var input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(output)) { byte[] bytes=new byte[1024]; while(input.read(bytes)!=-1) { } }
+        phoneMain=(MainActivity)waitForMonitorWithTimeout(monitor,15000); removeMonitor(monitor);
+        if(phoneMain==null) throw new AssertionError("Unlock phone and open MApp");
+        waitForIdleSync(); return phoneMain;
+    }
     private void checkSeasons033(Api api) throws Exception {
         var context=getTargetContext(); context.getSharedPreferences("settings",0).edit().putBoolean("ask_path",false).commit();
         String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:4")).getString("id");
@@ -171,7 +181,7 @@ public final class StreamInstrumentation extends Instrumentation {
     }
     private void checkNavigation(Api api) throws Exception {
         var context=getTargetContext();
-        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        var activity=arguments.containsKey("phone042")?phoneActivity():(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
             waitForIdleSync();
             runOnMainSync(()->{
@@ -378,10 +388,14 @@ public final class StreamInstrumentation extends Instrumentation {
         } finally { Library.remove(context,item.getString("id")); try { android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),uri); } catch(Exception ignored) { } runOnMainSync(activity::finish); }
     }
     private JSONObject waitDownload(String id) throws Exception {
-        long started=System.currentTimeMillis(), until=started+90000;
+        long started=System.currentTimeMillis(), until=started+90000, nextReport=0;
         while(System.currentTimeMillis()<until) {
             var items=Library.all(getTargetContext());
             for(int i=0;i<items.length();i++) { JSONObject item=items.optJSONObject(i); if(item.optString("id").equals(id)) {
+                if(arguments.containsKey("phone042") && System.currentTimeMillis()>=nextReport) {
+                    report("DOWNLOAD state="+item.optString("state")+" bytes="+item.optLong("downloaded")+"/"+item.optLong("size")+" queued="+DownloadService.queued.contains(id)+" error="+item.optString("error"));
+                    nextReport=System.currentTimeMillis()+10000;
+                }
                 if(item.optString("state").equals("paused") && System.currentTimeMillis()>started+1500 && !DownloadService.queued.contains(id)) throw new AssertionError("Download paused: "+item.optString("error"));
                 if(item.optString("state").equals("complete") && !DownloadService.queued.contains(id)) return item;
             } }
@@ -468,13 +482,15 @@ public final class StreamInstrumentation extends Instrumentation {
                 while(dialogField.get(activity)==null && System.currentTimeMillis()<deadline) Thread.sleep(100);
                 var dialog=(android.app.AlertDialog)dialogField.get(activity);
                 if(dialog==null) throw new AssertionError("Audio prompt did not appear");
-                Thread.sleep(500);
-                if(player.isPlaying()) throw new AssertionError("Playback not paused for audio choice");
+                long beforePause=player.getTime();
+                Thread.sleep(2000);
+                report("AUDIO dialog="+dialog.isShowing()+" playing="+player.isPlaying()+" before="+beforePause+" after="+player.getTime());
+                if(player.isPlaying() && dialog.isShowing()) throw new AssertionError("Playback not paused for audio choice: time="+player.getTime());
                 runOnMainSync(()->{ var list=dialog.getListView(); list.performItemClick(list.getChildAt(1),1,list.getAdapter().getItemId(1)); });
             }
             deadline=System.currentTimeMillis()+60000;
             while(player.getTime()<4000 && System.currentTimeMillis()<deadline) Thread.sleep(250);
-            if(player.getTime()<4000 || player.getAudioTracksCount()<1 || player.getVideoTracksCount()<1) throw new AssertionError("Decoder did not play");
+            if(player.getTime()<4000 || player.getAudioTracksCount()<1 || player.getVideoTracksCount()<1) throw new AssertionError("Decoder did not play: time="+player.getTime()+" playing="+player.isPlaying()+" audio="+player.getAudioTracksCount()+" video="+player.getVideoTracksCount());
             var media=player.getMedia(); var stats=media.getStats(); media.release();
             if(stats==null || stats.displayedPictures<=0) throw new AssertionError("No video frames displayed");
             runOnMainSync(()->{ try { var show=PlayerActivity.class.getDeclaredMethod("showControls"); show.setAccessible(true); show.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } });
@@ -675,9 +691,7 @@ public final class StreamInstrumentation extends Instrumentation {
         String component=prefs.getString("external_component","");
         MainActivity activity=null; PlayerActivity playerActivity=null;
         String mid="1ea5a5a915c02e3e6f69dfb1", rid="kinozal:1475843";
-        var launchMonitor=addMonitor(MainActivity.class.getName(),null,false);
-        try(var output=getUiAutomation().executeShellCommand("am start -n local.mapp/.MainActivity"); var input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(output)) { byte[] bytes=new byte[1024]; while(input.read(bytes)!=-1) { } }
-        activity=(MainActivity)waitForMonitorWithTimeout(launchMonitor,15000); removeMonitor(launchMonitor);
+        activity=phoneActivity();
         if(activity==null) throw new AssertionError("Phone must be unlocked for the test");
         JSONObject card=api.request("GET","/v1/movies/"+mid,null);
         // Force a state larger than Binder's limit even if the server cache changes.
@@ -754,7 +768,7 @@ public final class StreamInstrumentation extends Instrumentation {
     }
     private void checkDownloadBinder041(Api api) throws Exception {
         var context=getTargetContext(); var ids=new java.util.ArrayList<String>();
-        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        var activity=arguments.containsKey("phone042")?phoneActivity():(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
             JSONObject card=new JSONObject().put("description","x".repeat(1100000));
             for(int n=0;n<3;n++) {
@@ -797,7 +811,7 @@ public final class StreamInstrumentation extends Instrumentation {
         int oldSeconds=prefs.getInt("startup_seconds",180), oldPercent=prefs.getInt("download_percent",10);
         JSONObject item=new JSONObject().put("id",id).put("title",title).put("series",true).put("season",2).put("name","Release.Name.S09E08.mkv")
             .put("size",100L*1024*1024).put("duration",3600000).put("downloaded",10L*1024*1024).put("state","paused").put("index_ready",true).put("path","/v1/torrents/local-only-test/files/0");
-        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        var activity=arguments.containsKey("phone042")?phoneActivity():(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         android.net.Uri video=null, second=null;
         try {
             video=FolderLibrary.createVideo(context,tree,item); item.put("uri",video.toString());
@@ -839,10 +853,118 @@ public final class StreamInstrumentation extends Instrumentation {
             runOnMainSync(activity::finish);
         }
     }
+    private void checkPhoneDownload(Api api) throws Exception {
+        var context=getTargetContext(); var activity=phoneActivity();
+        var tree=android.net.Uri.parse(context.getSharedPreferences("settings",0).getString("folder",""));
+        String title="Проверка042-"+java.util.UUID.randomUUID(); JSONObject item=null;
+        try {
+            String key=api.request("POST","/v1/torrents",new JSONObject().put("release","local:1")).getString("id");
+            JSONObject file=api.request("GET","/v1/torrents/"+key,null).getJSONArray("files").getJSONObject(0);
+            item=new JSONObject().put("id",java.util.UUID.randomUUID().toString()).put("title",title).put("series",true).put("season",2)
+                .put("name","test-episode.mp4").put("movie","phone-test042").put("release","local:1").put("server",api.server)
+                .put("size",file.getLong("size")).put("path","/v1/torrents/"+key+"/files/"+file.getInt("index")).put("state","queued")
+                .put("card",new JSONObject().put("title",title).put("description","x".repeat(1100000)));
+            item.put("uri",FolderLibrary.createVideo(context,tree,item).toString()); Library.put(context,item); FolderLibrary.backup(context,item);
+            var intent=Library.itemIntent(context,DownloadService.class,item); runOnMainSync(()->activity.startForegroundService(intent));
+            item=waitDownload(item.getString("id"));
+            byte[] bytes; try(var input=context.getContentResolver().openInputStream(android.net.Uri.parse(item.getString("uri")))) { bytes=Api.read(input,32*1024*1024); }
+            var connection=api.open(item.getString("path"));
+            try(var input=connection.getInputStream()) { if(!java.util.Arrays.equals(bytes,Api.read(input,32*1024*1024))) throw new AssertionError("Download checksum differs"); }
+            finally { connection.disconnect(); }
+            String id=item.getString("id"), parent=item.getString("parent_id"); Library.remove(context,id);
+            var scan=FolderLibrary.class.getDeclaredMethod("scan",android.content.Context.class,android.net.Uri.class,String.class,java.util.Set.class); scan.setAccessible(true);
+            if((Integer)scan.invoke(null,context,tree,parent,new java.util.HashSet<String>())!=1) throw new AssertionError("Nested recovery failed");
+            item=Library.intentItem(context,new android.content.Intent().putExtra("item_id",id),"item");
+            if(!item.optString("state").equals("complete") || item.getJSONObject("card").getString("description").length()!=1100000) throw new AssertionError("Large sidecar recovery lost metadata");
+            try(var descriptor=context.getContentResolver().openFileDescriptor(android.net.Uri.parse(item.getString("uri")),"rw"); var out=new java.io.FileOutputStream(descriptor.getFileDescriptor())) { out.getChannel().truncate(Math.min(1024,bytes.length)); }
+            item.put("downloaded",Math.min(1024,bytes.length)).put("state","paused"); Library.put(context,item);
+            var resume=Library.itemIntent(context,DownloadService.class,item); runOnMainSync(()->activity.startForegroundService(resume));
+            item=waitDownload(id);
+            try(var input=context.getContentResolver().openInputStream(android.net.Uri.parse(item.getString("uri")))) { if(!java.util.Arrays.equals(bytes,Api.read(input,32*1024*1024))) throw new AssertionError("Resume checksum differs"); }
+        } finally {
+            if(item!=null) {
+                String id=item.optString("id"); DownloadService.cancelled.add(id);
+                long until=System.currentTimeMillis()+15000; while(DownloadService.queued.contains(id) && System.currentTimeMillis()<until) Thread.sleep(100);
+                FolderLibrary.remove(context,item); DownloadService.cancelled.remove(id);
+            }
+            var children=android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree,android.provider.DocumentsContract.getTreeDocumentId(tree));
+            try(var cursor=context.getContentResolver().query(children,new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)) {
+                if(cursor!=null) while(cursor.moveToNext()) if(title.equals(cursor.getString(1))) android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,cursor.getString(0)));
+            }
+            runOnMainSync(activity::finish);
+        }
+    }
+    private void checkIndex051() throws Exception {
+        var context=getTargetContext(); var activity=phoneActivity(); String mid="index051-"+java.util.UUID.randomUUID();
+        JSONObject r1=new JSONObject().put("id","fixture:1").put("series",true).put("resolution","720p").put("size","2 GiB").put("seeds",30).put("availability_known",false);
+        JSONObject r2=new JSONObject(r1.toString()).put("id","fixture:2").put("size","1 GiB");
+        org.json.JSONArray works=new org.json.JSONArray();
+        for(int number=1;number<=2;number++) {
+            var sources=new org.json.JSONArray();
+            for(String rid:new String[]{"fixture:1","fixture:2"}) sources.put(new JSONObject().put("release",rid).put("torrent",rid).put("index",number-1).put("name","S01E0"+number+".mkv").put("size",1024));
+            works.put(new JSONObject().put("id","s001e000"+number).put("season",1).put("number",number).put("sources",sources));
+        }
+        JSONObject card=new JSONObject().put("id",mid).put("title","Index test").put("description","Description").put("releases",new org.json.JSONArray().put(r1).put(r2)).put("works",works).put("complete_seasons",new JSONObject()).put("sources_version","test").put("indexing",false);
+        try {
+            MovieCache.write(context,mid,card);
+            JSONObject cached=MovieCache.read(context,mid);
+            if(cached==null || cached.getJSONArray("works").length()!=2 || cached.getJSONArray("releases").getJSONObject(0).getBoolean("availability_known")) throw new AssertionError("Card cache or unknown availability failed");
+            runOnMainSync(()->{ try {
+                var page=MainActivity.class.getDeclaredMethod("page",String.class,String.class); page.setAccessible(true); page.invoke(activity,"movie","Карточка фильма");
+                var show=MainActivity.class.getDeclaredMethod("showMovie",JSONObject.class); show.setAccessible(true); show.invoke(activity,card);
+            } catch(Exception e) { throw new RuntimeException(e); } });
+            waitForIdleSync();
+            runOnMainSync(()->((android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"episode-selector".equals(v.getTag()))).setSelection(1)); waitForIdleSync();
+            var spinner=(android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"source-selector".equals(v.getTag()));
+            runOnMainSync(()->spinner.setSelection(1)); waitForIdleSync();
+            var selectedBefore=(android.widget.TextView)spinner.getSelectedView();
+            var spans=((android.text.Spanned)selectedBefore.getText()).getSpans(0,1,android.text.style.ForegroundColorSpan.class);
+            if(spans.length!=1 || spans[0].getForegroundColor()!=0xffc7c7c7) throw new AssertionError("Unknown source not light gray");
+            var active=MainActivity.class.getDeclaredField("activeCard"); active.setAccessible(true); Object view=active.get(activity);
+            var merge=view.getClass().getDeclaredMethod("merge",JSONObject.class); merge.setAccessible(true);
+            JSONObject update=new JSONObject().put("unchanged",true).put("sources_version","test").put("indexing",false).put("availability",new org.json.JSONArray().put(new JSONObject().put("id","fixture:2").put("seeds",15).put("availability_known",true)));
+            runOnMainSync(()->{ try { merge.invoke(view,update); } catch(Exception e) { throw new RuntimeException(e); } }); waitForIdleSync();
+            if(spinner!=find(activity.getWindow().getDecorView(),v->"source-selector".equals(v.getTag())) || spinner.getSelectedItemPosition()!=1) throw new AssertionError("Availability rebuilt selector or reset source");
+            var episode=(android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"episode-selector".equals(v.getTag()));
+            if(episode.getSelectedItemPosition()!=1) throw new AssertionError("Episode selection reset");
+            var text=(android.text.Spanned)((android.widget.TextView)spinner.getSelectedView()).getText();
+            if(text.getSpans(0,1,android.text.style.ForegroundColorSpan.class)[0].getForegroundColor()!=0xff218739) throw new AssertionError("Fresh availability not green");
+        } finally { MovieCache.remove(context,mid); runOnMainSync(activity::finish); }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
             var context=getTargetContext();
+            if(arguments!=null && arguments.containsKey("index051")) { checkIndex051(); result.putString("stream","PASS: persistent card cache, gray-to-green availability, source and episode selection preserved"); finish(Activity.RESULT_OK,result); return; }
+            if(arguments!=null && arguments.containsKey("phone042")) {
+                phoneActivity();
+                Api phoneApi=new Api(context);
+                String mode=arguments.getString("phone042");
+                switch(mode) {
+                    case "folders" -> checkFoldersBuffer042();
+                    case "binder" -> checkDownloadBinder041(phoneApi);
+                    case "navigation" -> checkNavigation(phoneApi);
+                    case "player" -> checkPlayer(phoneApi,"local:2");
+                    case "download" -> checkPhoneDownload(phoneApi);
+                    case "real" -> checkLargeCard040(phoneApi);
+                    case "network" -> {
+                        boolean passed=true;
+                        for(String path:new String[]{"/v1/health","/v1/home","/v1/search?q=MCore&live=false","/v1/movies/1ea5a5a915c02e3e6f69dfb1/sources"}) {
+                            long began=System.currentTimeMillis(); var connection=phoneApi.open(path); connection.setConnectTimeout(5000); connection.setReadTimeout(10000);
+                            int count=0,code=0;
+                            try {
+                                code=connection.getResponseCode(); long headers=System.currentTimeMillis()-began;
+                                try(var input=connection.getInputStream()) { byte[] bytes=new byte[16384]; int n; while((n=input.read(bytes))!=-1) count+=n; }
+                                report("NETWORK "+path+" code="+code+" header_ms="+headers+" total_ms="+(System.currentTimeMillis()-began)+" bytes="+count);
+                            } catch(Exception error) { passed=false; report("NETWORK "+path+" code="+code+" bytes="+count+" ms="+(System.currentTimeMillis()-began)+" error="+error); }
+                            finally { connection.disconnect(); }
+                        }
+                        if(!passed) throw new AssertionError("Network probe failed; see NETWORK results");
+                    }
+                    default -> throw new AssertionError("Unknown phone test");
+                }
+                result.putString("stream","PASS phone042: "+mode); finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("phoneDecoder")) {
                 checkPhoneDecoder(); result.putString("stream","PASS: completed Xvid uses software policy and displays target scene; user history preserved");
                 finish(Activity.RESULT_OK,result); return;

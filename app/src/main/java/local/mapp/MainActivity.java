@@ -30,6 +30,8 @@ public final class MainActivity extends Activity {
     private int selectedFile=0;
     private int generation=0;
     private JSONObject currentMovie, pendingDownload;
+    private MovieCard activeCard;
+    private String openingMovie="";
     private String preferredRelease="";
     private JSONObject chosenFile;
     private String chosenTorrent="", selectedEpisode="";
@@ -219,7 +221,8 @@ public final class MainActivity extends Activity {
             recent.setVisibility(input.length()==0?View.VISIBLE:View.GONE);
         });
         Runnable[] pending={null}; int[] sequence={0};
-        java.util.function.Consumer<Boolean> find=live->{
+        java.util.function.Consumer<Boolean>[] find=new java.util.function.Consumer[1];
+        find[0]=live->{
             if(root!=searchRoot || !screen.equals("search")) return;
             String q=input.getText().toString().trim(); if(q.length()<2) return;
             int n=++sequence[0]; status.setText(live?"Ищем на сервере…":"Подсказки из индекса…");
@@ -228,6 +231,10 @@ public final class MainActivity extends Activity {
                 results.removeAllViews(); JSONArray movies=data.getJSONArray("movies");
                 status.setText(movies.length()==0?"Совпадений пока нет": "Найдено: "+movies.length());
                 if(data.getJSONArray("unavailable_providers").length()>0) status.append(" • Часть трекеров недоступна");
+                if(data.optBoolean("refreshing")) {
+                    status.append(" · обновляем каталог в фоне");
+                    ui.postDelayed(()->{ if(root==searchRoot && screen.equals("search") && n==sequence[0] && q.equals(input.getText().toString().trim())) find[0].accept(false); },2000);
+                }
                 boolean approximate=false;
                 for(int i=0;i<movies.length();i++) {
                     JSONObject item=movies.getJSONObject(i);
@@ -241,12 +248,12 @@ public final class MainActivity extends Activity {
         };
         input.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s,int st,int count,int after) { }
-            public void onTextChanged(CharSequence s,int st,int before,int count) { recent.setVisibility(s.length()==0?View.VISIBLE:View.GONE); if(s.length()<2) { sequence[0]++; results.removeAllViews(); } if(pending[0]!=null) ui.removeCallbacks(pending[0]); pending[0]=()->find.accept(false); ui.postDelayed(pending[0],400); }
+            public void onTextChanged(CharSequence s,int st,int before,int count) { recent.setVisibility(s.length()==0?View.VISIBLE:View.GONE); if(s.length()<2) { sequence[0]++; results.removeAllViews(); } if(pending[0]!=null) ui.removeCallbacks(pending[0]); pending[0]=()->find[0].accept(false); ui.postDelayed(pending[0],400); }
             public void afterTextChanged(Editable s) { }
         });
-        input.setOnEditorActionListener((v,id,event)->{ if(id==EditorInfo.IME_ACTION_SEARCH) { find.accept(true); return true; } return false; });
-        body.addView(button("Искать",()->find.accept(true)),2);
-        input.setText(initial); if(!initial.isEmpty()) { if(pending[0]!=null) ui.removeCallbacks(pending[0]); find.accept(true); }
+        input.setOnEditorActionListener((v,id,event)->{ if(id==EditorInfo.IME_ACTION_SEARCH) { find[0].accept(true); return true; } return false; });
+        body.addView(button("Искать",()->find[0].accept(true)),2);
+        input.setText(initial); if(!initial.isEmpty()) { if(pending[0]!=null) ui.removeCallbacks(pending[0]); find[0].accept(true); }
     }
     private View movieRow(JSONObject item,Runnable click) {
         LinearLayout row=new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(dp(12),dp(10),dp(12),dp(10)); row.setBackground(rounded(CARD));
@@ -281,8 +288,17 @@ public final class MainActivity extends Activity {
     private void movie(String id) {
         if(screen.equals("search")) { searchReturnRoot=root; searchReturnBody=body; }
         preferredRelease=""; preferredEpisode="";
-        page("movie","Карточка фильма"); body.addView(text("Обновляем раздачи и доступность источников…",16,MUTED));
-        task(()->request("GET","/v1/movies/"+id,null),this::showMovie);
+        page("movie","Карточка фильма"); body.addView(text("Открываем сохранённый каталог…",16,MUTED));
+        String opening=UUID.randomUUID().toString(); openingMovie=opening; activeCard=null;
+        io.submit(()->{
+            JSONObject cached=MovieCache.read(this,id);
+            if(cached!=null) ui.post(()->{ if(screen.equals("movie") && opening.equals(openingMovie)) try { showMovie(cached); } catch(Exception e) { Diagnostics.event("card-cache",e.getClass().getSimpleName()); } });
+            try {
+                JSONObject fresh=request("GET","/v1/movies/"+id,null); MovieCache.write(this,id,fresh);
+                ui.post(()->{ if(!screen.equals("movie") || !opening.equals(openingMovie)) return;
+                    try { if(activeCard!=null && activeCard.alive()) activeCard.merge(fresh); else showMovie(fresh); } catch(Exception e) { error(e); } });
+            } catch(Exception e) { ui.post(()->{ if(screen.equals("movie") && opening.equals(openingMovie) && activeCard==null) error(e); }); }
+        });
     }
     private void loadPoster(ImageView image,String mid) {
         image.setVisibility(View.GONE);
@@ -354,7 +370,7 @@ public final class MainActivity extends Activity {
     private void showMovie(JSONObject data) throws Exception {
         addSavedSources(data);
         generation++; sourceSelection++; currentMovie=data; chosenFile=null; chosenTorrent=""; sourceLoading=false;
-        body.removeAllViews(); new MovieCard(data).show();
+        body.removeAllViews(); activeCard=new MovieCard(data); activeCard.show();
     }
     private void addSavedSources(JSONObject data) throws Exception {
         JSONArray works=data.optJSONArray("works"); if(works==null) { works=new JSONArray(); data.put("works",works); }
@@ -464,7 +480,7 @@ public final class MainActivity extends Activity {
             select(list.get(selected));
             Spinner spinner=selector(sources,"Источник",labels,selected,n->{ JSONObject s=list.get(n); if(source!=s) select(s); });
             sourceAdapter=new ArrayAdapter<String>(MainActivity.this,android.R.layout.simple_spinner_dropdown_item,labels) {
-                private View tint(View row,int n) { JSONObject r=release(list.get(n).optString("release")); int seeds=r==null?0:r.optInt("seeds"); android.text.SpannableString value=new android.text.SpannableString(label(list.get(n))); value.setSpan(new android.text.style.ForegroundColorSpan(seeds>=10?0xff218739:seeds>=5?0xffe78016:seeds>0?0xffcf3030:Color.BLACK),0,1,0); ((TextView)row).setText(value); return row; }
+                private View tint(View row,int n) { JSONObject r=release(list.get(n).optString("release")); int seeds=r==null?0:r.optInt("seeds"); android.text.SpannableString value=new android.text.SpannableString(label(list.get(n))); value.setSpan(new android.text.style.ForegroundColorSpan(r==null || !r.optBoolean("availability_known")?0xffc7c7c7:seeds>=10?0xff218739:seeds>=5?0xffe78016:seeds>0?0xffcf3030:Color.BLACK),0,1,0); ((TextView)row).setText(value); return row; }
                 @Override public View getView(int n,View v,ViewGroup p) { View row=tint(super.getView(n,v,p),n); ((TextView)row).setTextColor(TEXT); return row; }
                 @Override public View getDropDownView(int n,View v,ViewGroup p) { return tint(super.getDropDownView(n,v,p),n); }
             }; spinner.setAdapter(sourceAdapter); spinner.setSelection(selected);
@@ -478,7 +494,7 @@ public final class MainActivity extends Activity {
             chosenTorrent=s.optString("torrent"); selectedTorrent=chosenTorrent; selectedFile=s.optInt("index"); selectedEpisode=workId; selectedSeries=isSeries();
             try { chosenFile=new JSONObject(s.toString()).put("position",WatchState.position(MainActivity.this,data.optString("id"),workId,chosenTorrent,selectedFile,isSeries()?work.optLong("position"):data.optLong("position"))); } catch(Exception ignored) { }
             sourceSelection++; watch.setTag("card-watch"); download.setTag("card-download");
-            details.setText(release==null?"":release.optString("release_title")+(release.optBoolean("swarm_stale")?"\nНе удалось обновить число раздающих. Показаны сохранённые данные.":"")); update();
+            details.setText(release==null?"":release.optString("release_title")); update();
             mediaInfo.setGravity(Gravity.CENTER);
             mediaInfo.setText(release==null?"":release.optString("audio").isEmpty()?"Дорожки и субтитры доступны в меню плеера":release.optString("audio"));
             frames.removeAllViews();
@@ -537,20 +553,42 @@ public final class MainActivity extends Activity {
             for(JSONObject w:seasonWorks) { JSONArray ss=w.optJSONArray("sources"); if(ss!=null) for(int i=0;i<ss.length();i++) { JSONObject s=ss.optJSONObject(i); if(releaseId.equals(s.optString("release"))) { files.add(s); break; } } }
             saveBatch(source.optString("torrent"),files,release);
         }
+        void merge(JSONObject result) throws Exception {
+            boolean unchanged=result.optBoolean("unchanged");
+            if(unchanged) {
+                JSONArray updates=result.optJSONArray("availability");
+                if(updates!=null) for(int i=0;i<updates.length();i++) { JSONObject fresh=updates.getJSONObject(i), target=release(fresh.optString("id"));
+                    if(target!=null) for(var keys=fresh.keys();keys.hasNext();) { String key=keys.next(); target.put(key,fresh.get(key)); }
+                }
+                data.put("indexing",result.optBoolean("indexing"));
+                data.put("sources_version",result.optString("sources_version"));
+            } else {
+                for(var keys=result.keys();keys.hasNext();) { String key=keys.next(); data.put(key,result.get(key)); }
+                addSavedSources(data);
+                String changed=String.valueOf(data.optJSONArray("works"))+data.optJSONObject("complete_seasons");
+                if(!signature.equals(changed) && !Boolean.TRUE.equals(watch.getTag()) && !Boolean.TRUE.equals(download.getTag())) {
+                    ScrollView scroll=(ScrollView)body.getParent(); int position=scroll.getScrollY();
+                    signature=changed; render(); scroll.post(()->{ if(alive()) scroll.scrollTo(0,position); });
+                }
+                View description=body.findViewWithTag("card-description");
+                if(description instanceof TextView) ((TextView)description).setText(cleanDescription(data.optString("description")));
+                JSONObject copy=new JSONObject(data.toString()); io.submit(()->MovieCache.write(MainActivity.this,data.optString("id"),copy));
+            }
+            release=release(releaseId);
+            if(sourceAdapter!=null) sourceAdapter.notifyDataSetChanged();
+            update();
+        }
         final Runnable tick=new Runnable() { public void run() {
             if(!alive()) return; update();
-            if(!polling && (polls<60 || data.optBoolean("indexing"))) {
+            if(!polling) {
                 polls++; polling=true; io.submit(()->{ try {
-                    JSONObject result=request("GET","/v1/movies/"+data.optString("id")+"/sources",null);
+                    JSONObject result=request("GET","/v1/movies/"+data.optString("id")+"/sources?since="+Uri.encode(data.optString("sources_version")),null);
                     ui.post(()->{ polling=false; if(!alive()) return; try {
-                        String changed=result.optJSONArray("works").toString()+result.optJSONObject("complete_seasons");
-                        for(var keys=result.keys();keys.hasNext();) { String key=keys.next(); data.put(key,result.get(key)); }
-                        addSavedSources(data);
-                        if(!signature.equals(changed) && !Boolean.TRUE.equals(watch.getTag()) && !Boolean.TRUE.equals(download.getTag())) { signature=changed; render(); }
+                        merge(result);
                     } catch(Exception e) { Diagnostics.event("catalog",e.getClass().getSimpleName()); } });
                 } catch(Exception e) { ui.post(()->polling=false); } });
             }
-            ui.postDelayed(this,polls<60?2000:5000);
+            ui.postDelayed(this,polls<20?2000:data.optBoolean("indexing")?5000:30000);
         }};
     }
     private String resolution(JSONObject release) { String value=release.optString("resolution"); return value.isEmpty() || value.toLowerCase(Locale.ROOT).contains("не указано")?"N\\A":value; }
