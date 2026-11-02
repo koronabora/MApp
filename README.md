@@ -1,6 +1,8 @@
 # MApp
 
-Android-клиент сервера **MCore**, версия **0.3.4** (`versionCode=10`). Android 10+; arm64 и x86_64.
+Android-клиент сервера **MCore**, версия **0.3.5** (`versionCode=11`). Android 10+; arm64 и x86_64.
+
+Исправления по девяти замечаниям и результаты проверки телефона: [release-035.md](docs/release-035.md).
 
 ## Обновление 0.3.4
 

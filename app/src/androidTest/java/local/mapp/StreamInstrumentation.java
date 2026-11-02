@@ -480,6 +480,7 @@ public final class StreamInstrumentation extends Instrumentation {
             runOnMainSync(()->{ try { var show=PlayerActivity.class.getDeclaredMethod("showControls"); show.setAccessible(true); show.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } });
             waitForIdleSync();
             try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"player033.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+            checkPlayerControls035(activity);
             long target=player.getLength()-5000; runOnMainSync(()->player.setTime(target));
             deadline=System.currentTimeMillis()+20000;
             int displayed=stats.displayedPictures; boolean tailPlayed=false;
@@ -501,6 +502,7 @@ public final class StreamInstrumentation extends Instrumentation {
         return count;
     }
     private void check034(Api api) throws Exception {
+        if(!MainActivity.cleanDescription("Uploader: Aids&lt;br&gt;Дикая Аляска").isEmpty() || MainActivity.cleanDescription("Описание &lt;b&gt;Аляски&lt;/b&gt;").contains("<")) throw new AssertionError("Cached description markup leaked");
         var context=getTargetContext(); String previous=Library.all(context).toString();
         var prefs=context.getSharedPreferences("settings",0); int percent=prefs.getInt("download_percent",10); prefs.edit().putInt("download_percent",10).commit();
         var target=java.io.File.createTempFile("local034", ".bin",context.getCacheDir());
@@ -525,7 +527,7 @@ public final class StreamInstrumentation extends Instrumentation {
                 int count=0; try(var in=missing.getInputStream()) { byte[] bytes=new byte[8192]; int n; while((n=in.read(bytes))>0) count+=n; } catch(java.io.IOException expected) { } finally { missing.disconnect(); }
                 if(count!=0) throw new AssertionError("Unsaved bytes fetched from server");
             }
-            JSONObject r1=new JSONObject().put("id","a").put("series",true).put("resolution","720p").put("size","1 GB").put("provider","local");
+            JSONObject r1=new JSONObject().put("id","a").put("series",true).put("resolution","720p").put("size","1 GB").put("provider","rutracker").put("seeds",12).put("release_title","Release information");
             JSONObject r2=new JSONObject(r1.toString()).put("id","b").put("resolution","1080p");
             JSONObject s1=new JSONObject().put("release","a").put("torrent",key).put("index",remote.getInt("index")).put("name","S01E01.mkv").put("size",remote.getLong("size")).put("episode","s001e0001").put("season",1).put("number",1);
             JSONObject s2=new JSONObject(s1.toString()).put("release","b").put("torrent","other");
@@ -539,6 +541,14 @@ public final class StreamInstrumentation extends Instrumentation {
                 runOnMainSync(()->((android.widget.Spinner)find(activity.getWindow().getDecorView(),v->"source-selector".equals(v.getTag()))).setSelection(selection)); waitForIdleSync();
                 runOnMainSync(()->{ var root=activity.getWindow().getDecorView();
                     if(actionCount(root)!=2) throw new AssertionError("Duplicate card actions");
+                    var line=find(root,v->"fixed-card-divider".equals(v.getTag()));
+                    if(line==null || line.getParent() instanceof android.widget.ScrollView) throw new AssertionError("Fixed header divider missing");
+                    var spinner=(android.widget.Spinner)find(root,v->"source-selector".equals(v.getTag()));
+                    var label=(android.widget.TextView)spinner.getSelectedView();
+                    if(!label.getText().toString().startsWith("●") || label.getText().toString().contains("rutracker")) throw new AssertionError("Availability dot/tracker label regression");
+                    var detail=find(root,v->v instanceof android.widget.TextView && "Release information".contentEquals(((android.widget.TextView)v).getText()));
+                    var watch=find(root,v->"card-watch".equals(v.getTag()));
+                    if(detail.getTop()>=watch.getTop()) throw new AssertionError("Release details below actions");
                     var seasonButton=find(root,v->"season-download".equals(v.getTag()));
                     if(seasonButton.isEnabled()!=(selection==0)) throw new AssertionError("Partial season source enabled");
                 });
@@ -548,13 +558,22 @@ public final class StreamInstrumentation extends Instrumentation {
             runOnMainSync(()->{ var root=activity.getWindow().getDecorView(); var watch=(android.widget.Button)find(root,v->"card-watch".equals(v.getTag())); if(watch.isEnabled() || !watch.getText().toString().equals("Просмотр")) throw new AssertionError("9% must be disabled"); });
             local.put("downloaded",(local.getLong("size")+9)/10); Library.put(context,local); Thread.sleep(2200);
             runOnMainSync(()->{ var watch=find(activity.getWindow().getDecorView(),v->"card-watch".equals(v.getTag())); if(!watch.isEnabled()) throw new AssertionError("10% must enable playback"); });
+            runOnMainSync(()->{ var watch=(android.widget.Button)find(activity.getWindow().getDecorView(),v->"card-watch".equals(v.getTag())); watch.setTag(Boolean.TRUE); watch.setText("Буферизация"); });
             DownloadService.queued.add("check034"); Thread.sleep(2200);
             runOnMainSync(()->{ var download=(android.widget.Button)find(activity.getWindow().getDecorView(),v->"card-download".equals(v.getTag())); if(!download.getText().toString().equals("Остановить скачивание")) throw new AssertionError("Stop action missing"); download.performClick(); });
             if(!DownloadService.paused.contains("check034") || !FolderLibrary.exists(context,local)) throw new AssertionError("Stop deleted file instead of pausing");
+            runOnMainSync(()->{ var root=activity.getWindow().getDecorView(); var watch=(android.widget.Button)find(root,v->"card-watch".equals(v.getTag())); if(watch==null || !watch.getText().toString().equals("Просмотр")) throw new AssertionError("Buffering survived local download"); });
             try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"card034.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+            runOnMainSync(()->{ var status=(android.widget.TextView)find(activity.getWindow().getDecorView(),v->"download-status".equals(v.getTag())); if(status==null || status.getGravity()!=android.view.Gravity.CENTER) throw new AssertionError("Download status not centered"); });
+            local.put("folder",prefs.getString("folder","")).put("downloaded",0).put("state","queued"); Library.put(context,local); FolderLibrary.backup(context,local);
+            DownloadService.delete(context,local);
+            Library.downloadState(context,local); FolderLibrary.backup(context,local);
+            if(FolderLibrary.exists(context,local)) throw new AssertionError("Queued download was not deleted immediately");
+            for(int n=0;n<Library.all(context).length();n++) if("check034".equals(Library.all(context).optJSONObject(n).optString("id"))) throw new AssertionError("Deleted download resurrected");
         } finally {
             runOnMainSync(activity::finish); DownloadService.queued.remove("check034"); DownloadService.paused.remove("check034"); target.delete();
-            android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),localUri);
+            if(FolderLibrary.exists(context,local)) android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),localUri);
+            DownloadService.cancelled.remove("check034");
             context.getSharedPreferences("library",0).edit().putString("items",previous).commit(); prefs.edit().putInt("download_percent",percent).commit();
         }
     }
@@ -579,11 +598,31 @@ public final class StreamInstrumentation extends Instrumentation {
             if(player==null || player.getTime()<61000) throw new AssertionError("Saved AVI did not play past target scene");
             var media=player.getMedia(); var stats=media.getStats(); media.release();
             if(stats==null || stats.displayedPictures<10) throw new AssertionError("No decoded frames");
+            checkPlayerControls035(activity);
             runOnMainSync(player::pause); waitForIdleSync();
             try(var out=new java.io.FileOutputStream(new java.io.File(context.getExternalFilesDir(null),"phone-embedded-034.png"))) {
                 getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);
             }
         } finally { runOnMainSync(activity::finish); }
+    }
+    private void checkPlayerControls035(PlayerActivity activity) throws Exception {
+        runOnMainSync(()->{ try {
+            var show=PlayerActivity.class.getDeclaredMethod("showControls"); show.setAccessible(true); show.invoke(activity);
+            var root=activity.getWindow().getDecorView();
+            for(String label:new String[]{"Назад","Повернуть экран","Блокировка управления","Назад 10 секунд","Пауза / продолжить","Вперёд 10 секунд","Аудиодорожки","Субтитры","Дополнительно"}) {
+                var button=find(root,v->label.contentEquals(v.getContentDescription()==null?"":v.getContentDescription()));
+                if(!(button instanceof android.widget.ImageButton) || button.getWidth()!=button.getHeight()) throw new AssertionError("Inconsistent vector control: "+label);
+            }
+            find(root,v->"Повернуть экран".contentEquals(v.getContentDescription()==null?"":v.getContentDescription())).performClick();
+        } catch(Exception e) { throw new RuntimeException(e); } });
+        long deadline=System.currentTimeMillis()+5000;
+        while(activity.getResources().getConfiguration().orientation!=android.content.res.Configuration.ORIENTATION_LANDSCAPE && System.currentTimeMillis()<deadline) Thread.sleep(100);
+        if(activity.getResources().getConfiguration().orientation!=android.content.res.Configuration.ORIENTATION_LANDSCAPE) throw new AssertionError("Rotate control failed");
+        runOnMainSync(()->{ try { var show=PlayerActivity.class.getDeclaredMethod("showControls"); show.setAccessible(true); show.invoke(activity); } catch(Exception e) { throw new RuntimeException(e); } });
+        waitForIdleSync();
+        try(var out=new java.io.FileOutputStream(new java.io.File(getTargetContext().getExternalFilesDir(null),"player035.png"))) { getUiAutomation().takeScreenshot().compress(android.graphics.Bitmap.CompressFormat.PNG,100,out); }
+        var info=getTargetContext().getPackageManager().getActivityInfo(new android.content.ComponentName(getTargetContext(),MainActivity.class),0);
+        if(info.screenOrientation!=android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT) throw new AssertionError("Main screen must return to portrait");
     }
     private void checkLocalAvi034(Api api) throws Exception {
         var context=getTargetContext(); String prior=Library.all(context).toString();
