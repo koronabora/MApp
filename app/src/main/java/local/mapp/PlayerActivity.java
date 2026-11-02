@@ -24,7 +24,7 @@ public final class PlayerActivity extends Activity {
     private final java.util.concurrent.atomic.AtomicBoolean saving=new java.util.concurrent.atomic.AtomicBoolean();
     private TextView status;
     private SeekBar seek;
-    private Button pause;
+    private ImageButton pause;
     private long resume, lastSaved;
     private boolean started, seeking, completed;
     private float buffering=100;
@@ -48,21 +48,21 @@ public final class PlayerActivity extends Activity {
         overlay=new LinearLayout(this); overlay.setOrientation(LinearLayout.VERTICAL); root.addView(overlay,new FrameLayout.LayoutParams(-1,-1));
         overlay.setBackgroundColor(0x22000000);
         top=new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL); top.setBackgroundColor(0x77000000); overlay.addView(top);
-        top.addView(icon("‹","Назад",this::finish));
+        top.addView(icon(R.drawable.player_arrow_back,"Назад",this::finish));
         TextView title=new TextView(this); title.setText("MApp"); title.setTextColor(Color.WHITE); title.setTextSize(18); top.addView(title,new LinearLayout.LayoutParams(0,-2,1));
-        top.addView(icon("⛶","Повернуть экран",()->setRequestedOrientation(getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)));
-        Button lock=icon("▣","Блокировка управления",()->{}); top.addView(lock);
-        lock.setOnClickListener(v->{ locked=!locked; bottom.setVisibility(locked?View.GONE:View.VISIBLE); lock.setText(locked?"◈":"▣"); Toast.makeText(this,locked?"Управление заблокировано":"Управление разблокировано",Toast.LENGTH_SHORT).show(); });
+        top.addView(icon(R.drawable.player_screen_rotation,"Повернуть экран",()->setRequestedOrientation(getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)));
+        ImageButton lock=icon(R.drawable.player_lock_open,"Блокировка управления",()->{}); top.addView(lock);
+        lock.setOnClickListener(v->{ locked=!locked; bottom.setVisibility(locked?View.GONE:View.VISIBLE); lock.setImageResource(locked?R.drawable.player_lock:R.drawable.player_lock_open); Toast.makeText(this,locked?"Управление заблокировано":"Управление разблокировано",Toast.LENGTH_SHORT).show(); });
         View space=new View(this); overlay.addView(space,new LinearLayout.LayoutParams(-1,0,1)); space.setOnClickListener(v->overlay.setVisibility(View.GONE));
         bottom=new LinearLayout(this); bottom.setOrientation(LinearLayout.VERTICAL); bottom.setPadding(dp(12),dp(8),dp(12),dp(12)); bottom.setBackgroundColor(0x77000000); overlay.addView(bottom);
         status=new TextView(this); status.setTextColor(Color.WHITE); status.setGravity(Gravity.CENTER); status.setText("Подготовка видео…"); bottom.addView(status);
         seek=new SeekBar(this); seek.setMax(10000); seek.setProgressTintList(android.content.res.ColorStateList.valueOf(0xffff8a24)); seek.setThumbTintList(android.content.res.ColorStateList.valueOf(0xffff8a24)); bottom.addView(seek);
         LinearLayout controls=new LinearLayout(this); controls.setGravity(Gravity.CENTER); bottom.addView(controls);
-        controls.addView(icon("↶","Назад 10 секунд",()->jump(-10000)));
-        pause=icon("Ⅱ","Пауза / продолжить",()->{ if(player.isPlaying()) player.pause(); else player.play(); showControls(); }); controls.addView(pause);
-        controls.addView(icon("↷","Вперёд 10 секунд",()->jump(10000)));
-        controls.addView(icon("♫","Аудиодорожки",()->tracks(false))); controls.addView(icon("CC","Субтитры",()->tracks(true)));
-        controls.addView(icon("⋮","Дополнительно",this::more));
+        controls.addView(icon(R.drawable.player_replay_10,"Назад 10 секунд",()->jump(-10000)));
+        pause=icon(R.drawable.player_pause,"Пауза / продолжить",()->{ if(player.isPlaying()) player.pause(); else player.play(); showControls(); }); controls.addView(pause);
+        controls.addView(icon(R.drawable.player_forward_10,"Вперёд 10 секунд",()->jump(10000)));
+        controls.addView(icon(R.drawable.player_audiotrack,"Аудиодорожки",()->tracks(false))); controls.addView(icon(R.drawable.player_subtitles,"Субтитры",()->tracks(true)));
+        controls.addView(icon(R.drawable.player_more_vert,"Дополнительно",this::more));
         final float[] down=new float[2];
         touch.setOnTouchListener((v,event)->{ if(event.getAction()==android.view.MotionEvent.ACTION_DOWN) { down[0]=event.getX(); down[1]=event.getY(); return true; }
             if(event.getAction()==android.view.MotionEvent.ACTION_UP) {
@@ -89,9 +89,9 @@ public final class PlayerActivity extends Activity {
                 if(event.type!=org.videolan.libvlc.MediaPlayer.Event.TimeChanged && event.type!=org.videolan.libvlc.MediaPlayer.Event.PositionChanged)
                     Diagnostics.event("player-event","type="+event.type);
                 if(event.type==MediaPlayer.Event.Playing) {
-                    pause.setText("Ⅱ"); showControls();
+                    pause.setImageResource(R.drawable.player_pause); showControls();
                     if(!started) { started=true; if(resume>0) player.setTime(resume); }
-                } else if(event.type==MediaPlayer.Event.Paused) { pause.setText("▶"); showControls(); }
+                } else if(event.type==MediaPlayer.Event.Paused) { pause.setImageResource(R.drawable.player_play_arrow); showControls(); }
                 else if(event.type==MediaPlayer.Event.Buffering) { buffering=event.getBuffering(); status.setText("Буферизация: "+(int)buffering+" %"); }
                 else if(event.type==MediaPlayer.Event.EncounteredError) new AlertDialog.Builder(this).setMessage("Не удалось прочитать видео. Проверьте соединение или выберите другую раздачу.").setPositiveButton("Закрыть",(d,n)->finish()).show();
                 else if(event.type==MediaPlayer.Event.EndReached) { completed=true; finish(); }
@@ -127,7 +127,7 @@ public final class PlayerActivity extends Activity {
     private Button control(String label,Runnable action) {
         Button button=new Button(this); button.setText(label); button.setAllCaps(false); button.setTextColor(Color.WHITE); button.setBackgroundColor(Color.TRANSPARENT); button.setOnClickListener(v->action.run()); return button;
     }
-    private Button icon(String symbol,String description,Runnable action) { Button b=control(symbol,action); b.setContentDescription(description); b.setTextSize(26); b.setMinWidth(0); b.setMinimumWidth(0); b.setPadding(0,0,0,0); int size=Math.min(dp(60),(getResources().getDisplayMetrics().widthPixels-dp(24))/6); b.setLayoutParams(new LinearLayout.LayoutParams(size,size)); return b; }
+    private ImageButton icon(int image,String description,Runnable action) { ImageButton b=new ImageButton(this); b.setImageResource(image); b.setImageTintList(android.content.res.ColorStateList.valueOf(Color.WHITE)); b.setContentDescription(description); b.setBackgroundColor(Color.TRANSPARENT); int size=Math.min(dp(60),(getResources().getDisplayMetrics().widthPixels-dp(24))/6); int padding=Math.max(dp(8),(size-dp(30))/2); b.setPadding(padding,padding,padding,padding); b.setScaleType(ImageView.ScaleType.FIT_CENTER); b.setLayoutParams(new LinearLayout.LayoutParams(size,size)); b.setOnClickListener(v->action.run()); return b; }
     private void showControls() { overlay.setVisibility(View.VISIBLE); ui.removeCallbacks(hideControls); ui.postDelayed(hideControls,4000); }
     private void more() {
         new AlertDialog.Builder(this).setItems(new String[]{"Скорость воспроизведения","Масштаб видео"},(d,n)->{
