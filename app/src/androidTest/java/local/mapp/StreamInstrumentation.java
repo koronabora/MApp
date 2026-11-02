@@ -752,6 +752,44 @@ public final class StreamInstrumentation extends Instrumentation {
             // Leave the real card available for the user's follow-up checks.
         }
     }
+    private void checkDownloadBinder041(Api api) throws Exception {
+        var context=getTargetContext(); var ids=new java.util.ArrayList<String>();
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            JSONObject card=new JSONObject().put("description","x".repeat(1100000));
+            for(int n=0;n<3;n++) {
+                String id="binder041-"+java.util.UUID.randomUUID(); ids.add(id);
+                JSONObject item=new JSONObject().put("id",id).put("title","Binder regression").put("server",api.server)
+                    .put("uri","file:///unused-binder-test").put("size",1).put("state","queued").put("card",card);
+                Library.put(context,item); DownloadService.paused.add(id);
+                var intent=Library.itemIntent(context,DownloadService.class,item);
+                var parcel=android.os.Parcel.obtain();
+                try { intent.writeToParcel(parcel,0); if(parcel.dataSize()>4096) throw new AssertionError("Large service Intent"); }
+                finally { parcel.recycle(); }
+                runOnMainSync(()->activity.startForegroundService(intent));
+            }
+            long until=System.currentTimeMillis()+20000; int ready=0;
+            while(System.currentTimeMillis()<until) {
+                ready=0; var items=Library.all(context);
+                for(int i=0;i<items.length();i++) { var item=items.getJSONObject(i); if(ids.contains(item.optString("id")) && item.optString("state").equals("paused")) {
+                    if(!item.optString("error").equals("Загрузка остановлена")) throw new AssertionError("Worker did not resolve item: "+item.optString("error"));
+                    if(item.getJSONObject("card").getString("description").length()!=1100000) throw new AssertionError("Lost large card");
+                    ready++;
+                } }
+                if(ready==3 && java.util.Collections.disjoint(DownloadService.queued,ids)) break;
+                Thread.sleep(100);
+            }
+            if(ready!=3) throw new AssertionError("Season-sized queue did not reach workers");
+            JSONObject saved=Library.intentItem(context,new android.content.Intent().putExtra("item_id",ids.get(0)),"local_item");
+            if(saved.getJSONObject("card").getString("description").length()!=1100000) throw new AssertionError("Player lost saved metadata");
+            Library.remove(context,ids.get(0));
+            try { Library.intentItem(context,new android.content.Intent().putExtra("item_id",ids.get(0)),"item"); throw new AssertionError("Deleted item resurrected"); }
+            catch(java.io.IOException expected) { }
+        } finally {
+            for(String id:ids) { Library.remove(context,id); DownloadService.paused.remove(id); }
+            runOnMainSync(activity::finish);
+        }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -761,6 +799,10 @@ public final class StreamInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK,result); return;
             }
             Api api=new Api(context);
+            if(arguments!=null && arguments.containsKey("binder041")) {
+                checkDownloadBinder041(api); result.putString("stream","PASS: three large-card downloads cross real service Binder by ID; saved playback lookup; deleted item rejected");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("largeCard040")) {
                 checkLargeCard040(api); result.putString("stream","PASS: series label, small Binder state, large-card recreation, real GOT internal decoding and external VLC return");
                 finish(Activity.RESULT_OK,result); return;

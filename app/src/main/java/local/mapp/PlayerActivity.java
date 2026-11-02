@@ -99,8 +99,8 @@ public final class PlayerActivity extends Activity {
             });
             Media media;
             Uri uri=getIntent().getData();
-            if(getIntent().hasExtra("local_item")) {
-                bridge=new PlaybackBridge(this,new JSONObject(getIntent().getStringExtra("local_item")));
+            if(getIntent().hasExtra("item_id") || getIntent().hasExtra("local_item")) {
+                bridge=new PlaybackBridge(this,Library.intentItem(this,getIntent(),"local_item"));
                 media=new Media(engine,Uri.parse(bridge.url()));
             } else if("local.mapp.media".equals(uri.getAuthority())) {
                 JSONObject source=MediaProvider.describe(this,uri);

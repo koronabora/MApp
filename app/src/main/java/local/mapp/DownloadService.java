@@ -39,9 +39,9 @@ public final class DownloadService extends Service {
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId) {
         startForeground(1,notification("Сохранение фильма",0));
-        if(intent==null || intent.getStringExtra("item")==null) { stopSelf(); return START_NOT_STICKY; }
+        if(intent==null || (!intent.hasExtra("item_id") && !intent.hasExtra("item"))) { stopSelf(); return START_NOT_STICKY; }
         try {
-            JSONObject item=new JSONObject(intent.getStringExtra("item"));
+            JSONObject item=Library.intentItem(this,intent,"item");
             if(queued.add(item.getString("id"))) worker.submit(()->{
                 try { download(item); }
                 finally { queued.remove(item.optString("id")); if(queued.isEmpty()) stopSelfResult(startId); }

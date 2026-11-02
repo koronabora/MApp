@@ -525,7 +525,7 @@ public final class MainActivity extends Activity {
             if(source==null) return; JSONObject local=local(source);
             if(local!=null) {
                 if(DownloadService.queued.contains(local.optString("id"))) DownloadService.paused.add(local.optString("id"));
-                else { DownloadService.paused.remove(local.optString("id")); startForegroundService(new Intent(MainActivity.this,DownloadService.class).putExtra("item",local.toString())); }
+                else { DownloadService.paused.remove(local.optString("id")); startForegroundService(Library.itemIntent(MainActivity.this,DownloadService.class,local)); }
                 update(); return;
             }
             saveFile(source.optString("torrent"),chosenFile);
@@ -834,7 +834,7 @@ public final class MainActivity extends Activity {
                     PlaybackBridge local=new PlaybackBridge(this,item);
                     launchExternal(Uri.parse(PlaybackService.open(this,local)),playingMovie,position);
                 } else startActivityForResult(new Intent(this,PlayerActivity.class).setData(Uri.parse(playingUri))
-                    .putExtra("local_item",item.toString()).putExtra("saved_uri",playingUri).putExtra("movie",playingMovie)
+                    .putExtra("item_id",item.getString("id")).putExtra("saved_uri",playingUri).putExtra("movie",playingMovie)
                     .putExtra("position",position).putExtra("episode",selectedEpisode).putExtra("torrent",selectedTorrent).putExtra("file",selectedFile),200);
             } catch(Exception e) { error(e); } return;
         }
@@ -891,7 +891,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle(item.optString("name",item.optString("title"))).setItems(choices.toArray(new String[0]),(d,n)->{
             switch(choices.get(n)) {
                 case "Смотреть" -> playSaved(item);
-                case "Продолжить загрузку" -> { startForegroundService(new Intent(this,DownloadService.class).putExtra("item",item.toString())); library(); }
+                case "Продолжить загрузку" -> { startForegroundService(Library.itemIntent(this,DownloadService.class,item)); library(); }
                 case "Смотреть с сервера" -> { try {
                     String[] parts=item.getString("path").split("/"); selectedRelease=item.optString("release");
                     JSONObject file=new JSONObject().put("index",Integer.parseInt(parts[5])).put("size",item.getLong("size")).put("name",item.getString("name"));
@@ -1035,7 +1035,7 @@ public final class MainActivity extends Activity {
             JSONArray saved=Library.all(this); String server=new Api(this).server;
             for(int i=0;i<saved.length();i++) if(saved.optJSONObject(i).optString("path").equals(mediaPath) && saved.optJSONObject(i).optString("server").equals(server)) {
                 JSONObject existing=saved.optJSONObject(i);
-                if(!existing.optString("state").equals("complete") && !DownloadService.queued.contains(existing.optString("id"))) { DownloadService.paused.remove(existing.optString("id")); startForegroundService(new Intent(this,DownloadService.class).putExtra("item",existing.toString())); }
+                if(!existing.optString("state").equals("complete") && !DownloadService.queued.contains(existing.optString("id"))) { DownloadService.paused.remove(existing.optString("id")); startForegroundService(Library.itemIntent(this,DownloadService.class,existing)); }
                 if(!batchDownload && !screen.equals("movie")) library(); return;
             }
             for(JSONObject item:pendingBatch) if(item.optString("path").equals(mediaPath) && item.optString("server").equals(server)) return;
@@ -1125,7 +1125,7 @@ public final class MainActivity extends Activity {
         pendingDownload.put("uri",uri.toString()).put("queued_at",System.currentTimeMillis()); Library.put(this,pendingDownload);
         FolderLibrary.backup(this,pendingDownload);
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},300);
-        startForegroundService(new Intent(this,DownloadService.class).putExtra("item",pendingDownload.toString())); pendingDownload=null; if(!batchDownload && !screen.equals("movie")) library();
+        startForegroundService(Library.itemIntent(this,DownloadService.class,pendingDownload)); pendingDownload=null; if(!batchDownload && !screen.equals("movie")) library();
     }
     private String stateLabel(JSONObject item) {
         return switch(item.optString("state")) {
@@ -1157,7 +1157,7 @@ public final class MainActivity extends Activity {
             ImageButton transfer=new ImageButton(this); transfer.setTag("download-control:"+item.optString("id")); transfer.setImageTintList(android.content.res.ColorStateList.valueOf(contrast(BUTTON))); transfer.setBackground(rounded(BUTTON)); transfer.setPadding(dp(12),dp(12),dp(12),dp(12));
             transfer.setOnClickListener(v->{ JSONObject latest=latestSaved(item); String id=latest.optString("id");
                 if(DownloadService.queued.contains(id)) DownloadService.paused.add(id);
-                else { DownloadService.paused.remove(id); startForegroundService(new Intent(this,DownloadService.class).putExtra("item",latest.toString())); }
+                else { DownloadService.paused.remove(id); startForegroundService(Library.itemIntent(this,DownloadService.class,latest)); }
                 updateTransferButton(transfer,latest);
             });
             LinearLayout.LayoutParams transferParams=new LinearLayout.LayoutParams(dp(48),dp(48)); transferParams.topMargin=dp(32); actions.addView(transfer,transferParams); updateTransferButton(transfer,item);

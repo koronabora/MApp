@@ -5,6 +5,20 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 final class Library {
+    static android.content.Intent itemIntent(Context c,Class<?> target,JSONObject item) {
+        String id=item.optString("id");
+        if(id.isEmpty()) throw new IllegalArgumentException("Missing library item ID");
+        return new android.content.Intent(c,target).putExtra("item_id",id);
+    }
+    static JSONObject intentItem(Context c,android.content.Intent intent,String legacyExtra) throws Exception {
+        String id=intent.getStringExtra("item_id");
+        if(id!=null) {
+            JSONArray items=all(c);
+            for(int i=0;i<items.length();i++) if(id.equals(items.getJSONObject(i).optString("id"))) return items.getJSONObject(i);
+            throw new java.io.IOException("Файл удалён из библиотеки");
+        }
+        return new JSONObject(intent.getStringExtra(legacyExtra));
+    }
     static synchronized JSONArray all(Context c) {
         try { return new JSONArray(c.getSharedPreferences("library",0).getString("items","[]")); }
         catch(Exception e) { return new JSONArray(); }
