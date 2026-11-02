@@ -790,6 +790,55 @@ public final class StreamInstrumentation extends Instrumentation {
             runOnMainSync(activity::finish);
         }
     }
+    private void checkFoldersBuffer042() throws Exception {
+        var context=getTargetContext(); var prefs=context.getSharedPreferences("settings",0);
+        String title="Карточка042-"+java.util.UUID.randomUUID(), id=java.util.UUID.randomUUID().toString();
+        var tree=android.net.Uri.parse(prefs.getString("folder",""));
+        int oldSeconds=prefs.getInt("startup_seconds",180), oldPercent=prefs.getInt("download_percent",10);
+        JSONObject item=new JSONObject().put("id",id).put("title",title).put("series",true).put("season",2).put("name","Release.Name.S09E08.mkv")
+            .put("size",100L*1024*1024).put("duration",3600000).put("downloaded",10L*1024*1024).put("state","paused").put("index_ready",true).put("path","/v1/torrents/local-only-test/files/0");
+        var activity=(MainActivity)startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        android.net.Uri video=null, second=null;
+        try {
+            video=FolderLibrary.createVideo(context,tree,item); item.put("uri",video.toString());
+            String parent=item.getString("parent_id");
+            try(var cursor=context.getContentResolver().query(android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,parent),new String[]{android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)) {
+                if(cursor==null || !cursor.moveToFirst() || !"Сезон 2".equals(cursor.getString(0))) throw new AssertionError("Season taken from filename instead of card");
+            }
+            JSONObject next=new JSONObject(item.toString()).put("name","other.mkv"); second=FolderLibrary.createVideo(context,tree,next);
+            if(!parent.equals(next.getString("parent_id"))) throw new AssertionError("Season folder duplicated");
+            if(!parent.contains(title)) throw new AssertionError("Movie folder does not use card title");
+            try(var out=new java.io.FileOutputStream(LocalIndex.file(context,item))) { byte[] bytes=new byte[1024*1024]; java.util.Arrays.fill(bytes,(byte)73); for(int i=0;i<8;i++) out.write(bytes); }
+            var ready=MainActivity.class.getDeclaredMethod("localReady",JSONObject.class); ready.setAccessible(true);
+            prefs.edit().putInt("startup_seconds",180).putInt("download_percent",10).commit();
+            if(!((Boolean)ready.invoke(activity,item))) throw new AssertionError("Prepared prefix should be ready");
+            prefs.edit().putInt("startup_seconds",600).commit();
+            if((Boolean)ready.invoke(activity,item)) throw new AssertionError("Minutes threshold ignored");
+            prefs.edit().putInt("startup_seconds",180).commit();
+            item.put("downloaded",9L*1024*1024);
+            if((Boolean)ready.invoke(activity,item)) throw new AssertionError("Percentage threshold ignored");
+            item.put("downloaded",10L*1024*1024); Library.put(context,item);
+            try(var bridge=new PlaybackBridge(context,item)) {
+                var connection=(java.net.HttpURLConnection)new java.net.URL(bridge.url()).openConnection();
+                connection.setRequestProperty("Range","bytes="+LocalIndex.offset(item)+"-"+(LocalIndex.offset(item)+31));
+                try(var input=connection.getInputStream()) { byte[] bytes=Api.read(input,32); if(bytes.length!=32 || bytes[0]!=73) throw new AssertionError("Local index not served"); }
+                finally { connection.disconnect(); }
+            }
+            LocalIndex.file(context,item).delete();
+            if((Boolean)ready.invoke(activity,item)) throw new AssertionError("Missing index allowed playback");
+        } finally {
+            prefs.edit().putInt("startup_seconds",oldSeconds).putInt("download_percent",oldPercent).commit();
+            LocalIndex.file(context,item).delete(); Library.remove(context,id);
+            if(video!=null) android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),video);
+            if(second!=null) android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),second);
+            // Remove the test-only title directory, including its empty season directory.
+            var children=android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree,android.provider.DocumentsContract.getTreeDocumentId(tree));
+            try(var cursor=context.getContentResolver().query(children,new String[]{android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null)) {
+                if(cursor!=null) while(cursor.moveToNext()) if(title.equals(cursor.getString(1))) android.provider.DocumentsContract.deleteDocument(context.getContentResolver(),android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,cursor.getString(0)));
+            }
+            runOnMainSync(activity::finish);
+        }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -799,6 +848,10 @@ public final class StreamInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK,result); return;
             }
             Api api=new Api(context);
+            if(arguments!=null && arguments.containsKey("folders042")) {
+                checkFoldersBuffer042(); result.putString("stream","PASS: card-title/season folders, folder reuse, percentage/minutes/index gates, local-only index reads");
+                finish(Activity.RESULT_OK,result); return;
+            }
             if(arguments!=null && arguments.containsKey("binder041")) {
                 checkDownloadBinder041(api); result.putString("stream","PASS: three large-card downloads cross real service Binder by ID; saved playback lookup; deleted item rejected");
                 finish(Activity.RESULT_OK,result); return;

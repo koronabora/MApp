@@ -82,11 +82,16 @@ public final class DownloadService extends Service {
                         done=end+1;
                         item.put("downloaded",done).put("download_rate",(done-chunkStart)*1000/Math.max(1,System.currentTimeMillis()-chunkStarted)); Library.downloadState(this,item);
                         FolderLibrary.backup(this,item);
+                        if(!LocalIndex.ready(this,item) && done>=Math.min(total,4L*1024*1024)) {
+                            try { LocalIndex.prepare(this,api,item); }
+                            catch(Exception error) { Diagnostics.event("download-index",error.getClass().getSimpleName()); }
+                        }
                         getSystemService(NotificationManager.class).notify(1,notification(item.getString("title"),(int)(done*100/total)));
                     }
                 }
             }
             item.put("state",done==total?"complete":"paused");
+            if(done==total) LocalIndex.file(this,item).delete();
             Diagnostics.event("download",item.optString("state")+" bytes="+done);
             if(done==total && item.optBoolean("mediastore")) {
                 ContentValues values=new ContentValues(); values.put(MediaStore.Downloads.IS_PENDING,0);

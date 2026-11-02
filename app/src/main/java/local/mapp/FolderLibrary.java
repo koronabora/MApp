@@ -13,6 +13,29 @@ final class FolderLibrary {
     static Uri create(Context context,Uri tree,String name) throws Exception {
         return DocumentsContract.createDocument(context.getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree)),"video/*",name);
     }
+    static synchronized Uri createVideo(Context context,Uri tree,JSONObject item) throws Exception {
+        String title=item.optString("title","").replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]","_").trim().replaceAll("[. ]+$","");
+        if(title.isEmpty()) title="Без названия";
+        if(title.length()>120) title=title.substring(0,120);
+        String parent=directory(context,tree,DocumentsContract.getTreeDocumentId(tree),title);
+        if(item.optBoolean("series")) parent=directory(context,tree,parent,item.optInt("season",0)>0?"Сезон "+item.optInt("season"):"Сезон не указан");
+        item.put("folder",tree.toString()).put("parent_id",parent);
+        return DocumentsContract.createDocument(context.getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,parent),"video/*",item.getString("name"));
+    }
+    private static String directory(Context context,Uri tree,String root,String title) throws Exception {
+        String parent=null;
+        Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,root);
+        try(var cursor=context.getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null)) {
+            if(cursor==null) throw new java.io.IOException("Не удалось открыть папку загрузок");
+            while(cursor.moveToNext()) if(title.equals(cursor.getString(1)) && DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(2))) { parent=cursor.getString(0); break; }
+        }
+        if(parent==null) {
+            Uri folder=DocumentsContract.createDocument(context.getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,root),DocumentsContract.Document.MIME_TYPE_DIR,title);
+            if(folder==null) throw new java.io.IOException("Не удалось создать папку фильма");
+            parent=DocumentsContract.getDocumentId(folder);
+        }
+        return parent;
+    }
     static void backup(Context context,JSONObject item) {
         synchronized(Library.class) {
         if(DownloadService.cancelled.contains(item.optString("id"))) return;
@@ -61,7 +84,7 @@ final class FolderLibrary {
                 if(DocumentsContract.Document.MIME_TYPE_DIR.equals(type)) { folders.add(id); continue; }
                 if(name.endsWith(".mapp.json")) {
                     try(var input=context.getContentResolver().openInputStream(uri)) {
-                        JSONObject record=new JSONObject(new String(Api.read(input,1024*1024),StandardCharsets.UTF_8));
+                        JSONObject record=new JSONObject(new String(Api.read(input,16*1024*1024),StandardCharsets.UTF_8));
                         if(record.optInt("format")==1) { manifests.put(record.optString("name"),record); sidecars.put(record.optString("name"),uri); }
                     } catch(Exception ignored) { }
                 } else if((type!=null && type.startsWith("video/")) || name.matches("(?i).*\\.(mkv|avi|mp4|m4v|mov|ts|webm)$"))
@@ -109,6 +132,7 @@ final class FolderLibrary {
             if(DocumentsContract.isDocumentUri(context,uri)) { if(!DocumentsContract.deleteDocument(context.getContentResolver(),uri)) throw new java.io.IOException("Не удалось удалить файл"); }
             else if(context.getContentResolver().delete(uri,null,null)==0) throw new java.io.IOException("Не удалось удалить файл");
         }
+        LocalIndex.file(context,item).delete();
         if(!item.optString("sidecar").isEmpty()) try {
             Uri sidecar=Uri.parse(item.getString("sidecar"));
             if(DocumentsContract.isDocumentUri(context,sidecar)) DocumentsContract.deleteDocument(context.getContentResolver(),sidecar); else context.getContentResolver().delete(sidecar,null,null);

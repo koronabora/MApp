@@ -508,7 +508,7 @@ public final class MainActivity extends Activity {
                 boolean active=local!=null && DownloadService.queued.contains(local.optString("id"));
                 download.setText(active?"Остановить скачивание":"Скачать"); download.setEnabled(source!=null && (local==null || !local.optString("state").equals("complete")));
             }
-            if(source!=null) status.setText(local==null?(data.optBoolean("indexing")?"Индексируем остальные источники…":""):stateLabel(local)+(localReady(local)?"":" · просмотр после "+prefs.getInt("download_percent",10)+" %"));
+            if(source!=null) status.setText(local==null?(data.optBoolean("indexing")?"Индексируем остальные источники…":""):stateLabel(local)+(localReady(local)?"":" · нужен индекс и буфер: "+prefs.getInt("download_percent",10)+" %, "+prefs.getInt("startup_seconds",180)/60+" мин"));
             seasonDownload.setEnabled(source!=null && completeSeason());
             seasonDownload.setVisibility(isSeries()?View.VISIBLE:View.GONE); seasonDivider.setVisibility(isSeries()?View.VISIBLE:View.GONE);
             if(sourceAdapter!=null) sourceAdapter.notifyDataSetChanged();
@@ -828,7 +828,7 @@ public final class MainActivity extends Activity {
         position=WatchState.position(this,item.optString("movie"),selectedEpisode,selectedTorrent,selectedFile,position);
         if(!item.optString("state").equals("complete")) {
             try {
-                if(!localReady(item)) { notice("Для просмотра нужно скачать "+prefs.getInt("download_percent",10)+" % файла"); return; }
+                if(!localReady(item)) { notice("Для просмотра нужны индекс, не менее "+prefs.getInt("download_percent",10)+" % файла и "+prefs.getInt("startup_seconds",180)/60+" мин видео"); return; }
                 playingMovie=item.optString("movie"); playingEpisode=selectedEpisode; playingTorrent=selectedTorrent; playingFile=selectedFile; playingUri=item.getString("uri");
                 if(prefs.getBoolean("external_player",false)) {
                     PlaybackBridge local=new PlaybackBridge(this,item);
@@ -840,7 +840,14 @@ public final class MainActivity extends Activity {
         }
         play(Uri.parse(item.optString("uri")),item.optString("movie"),position);
     }
-    private boolean localReady(JSONObject item) { return item.optString("state").equals("complete") || (item.optLong("size")>0 && item.optLong("downloaded")*100/item.optLong("size")>=prefs.getInt("download_percent",10)); }
+    private boolean localReady(JSONObject item) {
+        if(item.optString("state").equals("complete")) return true;
+        long size=item.optLong("size"), duration=item.optLong("duration"), done=item.optLong("downloaded");
+        if(size<=0 || duration<=0 || !LocalIndex.ready(this,item)) return false;
+        long position=item.optLong("position");
+        long needed=Math.min(size,Math.max((long)Math.ceil(size*prefs.getInt("download_percent",10)/100.0),(long)Math.ceil(size*(position+prefs.getInt("startup_seconds",180)*1250.0)/duration)));
+        return done>=needed;
+    }
     private void savedActions(JSONObject data) {
         Button open=button("Открыть сохранённое",()->{
             playSavedChoices(selectedSaved(data));
@@ -953,23 +960,23 @@ public final class MainActivity extends Activity {
         button.setTag(Boolean.TRUE); button.setEnabled(false);
         if(System.currentTimeMillis()-started<500) button.setText("Подготовка видео • проверяем индекс и буфер…");
         int selection=sourceSelection; JSONObject choice=chosenFile;
-        int seconds=prefs.getInt("buffer",15);
+        int seconds=prefs.getInt("startup_seconds",180);
         long position=file.has("episode")?file.optLong("position"):currentMovie.optLong("position");
-        task(()->request("GET","/v1/torrents/"+torrent+"?file="+file.getInt("index")+"&buffer="+seconds+"&position="+position,null),status->{
+        task(()->request("GET","/v1/torrents/"+torrent+"?file="+file.getInt("index")+"&buffer="+seconds+"&percent="+prefs.getInt("download_percent",10)+"&position="+position,null),status->{
             if(selection!=sourceSelection || choice!=chosenFile) return;
             for(JSONObject saved:matchingSaved(currentMovie)) if(saved.optString("path").equals("/v1/torrents/"+torrent+"/files/"+file.optInt("index"))) { sourceSelection++; button.setTag("card-watch"); button.setText("Просмотр"); button.setEnabled(localReady(saved)); return; }
             Diagnostics.event("buffer","ready="+status.optBoolean("ready")+" percent="+status.optInt("buffer_percent")+" missing="+status.optLong("buffer_missing_bytes")+" position="+position);
             if(!status.isNull("error") && !status.optString("error").isEmpty()) {
                 button.setTag(null); button.setEnabled(true); button.setText("Повторить"); notice(status.getString("error")); return;
             }
-            if(status.optBoolean("ready")) {
+            if(status.optBoolean("ready") && status.optBoolean("index_ready")) {
                 button.setTag(null); button.setEnabled(true); button.setText("Продолжить просмотр");
                 selectedTorrent=torrent; selectedFile=file.getInt("index");
                 selectedEpisode=file.optString("episode");
                 Uri uri=MediaProvider.create(this,"/v1/torrents/"+torrent+"/files/"+file.getInt("index"),file.getLong("size"),file.getString("name"));
                 play(uri,currentMovie.optString("id"),position); return;
             }
-            if(System.currentTimeMillis()-started>300000) { button.setTag(null); button.setEnabled(true); button.setText("Повторить буферизацию"); notice("Буфер пока не готов. Попробуйте раздачу с большим числом сидов."); return; }
+            if(System.currentTimeMillis()-started>1800000) { button.setTag(null); button.setEnabled(true); button.setText("Повторить буферизацию"); notice("Буфер пока не готов. Попробуйте раздачу с большим числом сидов."); return; }
             button.setText((status.isNull("media")?"Получаем метаданные и индекс…":"Буферизация")+" • "+status.optInt("buffer_percent")+"%"+(status.isNull("buffer_eta")?" • ожидаем данные":" • примерно "+status.optInt("buffer_eta")+" с"));
             int version=generation; ui.postDelayed(()->{ if(version==generation) {
                 if(selection==sourceSelection && choice==chosenFile) buffer(torrent,file,button,started);
@@ -1052,7 +1059,7 @@ public final class MainActivity extends Activity {
             } else {
                 String folder=prefs.getString("folder",""); Uri uri;
                 if(!folder.isEmpty()) {
-                    Uri tree=Uri.parse(folder); uri=FolderLibrary.create(this,tree,filename); pendingDownload.put("folder",folder);
+                    Uri tree=Uri.parse(folder); uri=FolderLibrary.createVideo(this,tree,pendingDownload);
                 } else {
                     ContentValues values=new ContentValues(); values.put(MediaStore.Downloads.DISPLAY_NAME,filename); values.put(MediaStore.Downloads.MIME_TYPE,"video/x-matroska");
                     values.put(MediaStore.Downloads.RELATIVE_PATH,"Download/MApp"); values.put(MediaStore.Downloads.IS_PENDING,1);
@@ -1115,7 +1122,7 @@ public final class MainActivity extends Activity {
     }
     private void startBatch(Uri tree) {
         batchDownload=true;
-        try { while(!pendingBatch.isEmpty()) { pendingDownload=pendingBatch.get(0); pendingDownload.put("folder",tree.toString()); startDownload(FolderLibrary.create(this,tree,pendingDownload.getString("name"))); pendingBatch.remove(0); } }
+        try { while(!pendingBatch.isEmpty()) { pendingDownload=pendingBatch.get(0); startDownload(FolderLibrary.createVideo(this,tree,pendingDownload)); pendingBatch.remove(0); } }
         catch(Exception e) { pendingBatch.clear(); pendingDownload=null; error(e); }
         finally { batchDownload=false; if(!screen.equals("movie")) library(); }
     }
@@ -1244,12 +1251,13 @@ public final class MainActivity extends Activity {
         q.setSelection(Math.max(0,Arrays.asList(quality).indexOf(prefs.getString("quality","1080p"))));
         body.addView(text("Предпочитаемое разрешение",16,TEXT)); body.addView(q);
         q.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() { public void onNothingSelected(AdapterView<?> p) { } public void onItemSelected(AdapterView<?> p,View v,int n,long id) { if(v instanceof TextView) ((TextView)v).setTextColor(TEXT); prefs.edit().putString("quality",quality[n]).apply(); } });
-        TextView buffer=text("Буферизация: "+prefs.getInt("buffer",15)+" с",16,TEXT); body.addView(buffer);
+        TextView buffer=text("Видео до старта: "+prefs.getInt("startup_seconds",180)/60+" мин",16,TEXT); body.addView(buffer);
+        body.addView(text("До старта нужны индекс и оба порога: процент файла и запас времени. Для потока — в кеше сервера, для сохранённого видео — на устройстве.",13,MUTED));
         TextView percent=text("Скачать % для просмотра: "+prefs.getInt("download_percent",10)+" %",16,TEXT); body.addView(percent);
         SeekBar threshold=new SeekBar(this); threshold.setMin(1); threshold.setMax(100); threshold.setProgress(prefs.getInt("download_percent",10)); body.addView(threshold);
         threshold.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() { public void onStartTrackingTouch(SeekBar s) { } public void onStopTrackingTouch(SeekBar s) { } public void onProgressChanged(SeekBar s,int n,boolean user) { prefs.edit().putInt("download_percent",n).apply(); percent.setText("Скачать % для просмотра: "+n+" %"); } });
-        SeekBar seek=new SeekBar(this); seek.setMin(5); seek.setMax(120); seek.setProgress(prefs.getInt("buffer",15)); body.addView(seek);
-        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() { public void onStartTrackingTouch(SeekBar s) { } public void onStopTrackingTouch(SeekBar s) { } public void onProgressChanged(SeekBar s,int n,boolean user) { prefs.edit().putInt("buffer",n).apply(); buffer.setText("Буферизация: "+n+" с"); } });
+        SeekBar seek=new SeekBar(this); seek.setMin(1); seek.setMax(15); seek.setProgress(prefs.getInt("startup_seconds",180)/60); body.addView(seek);
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() { public void onStartTrackingTouch(SeekBar s) { } public void onStopTrackingTouch(SeekBar s) { } public void onProgressChanged(SeekBar s,int n,boolean user) { prefs.edit().putInt("startup_seconds",n*60).apply(); buffer.setText("Видео до старта: "+n+" мин"); } });
         body.addView(text("Встроенный плеер: AVI/MKV/MP4, перемотка, аудиодорожки, субтитры и сохранение позиции. Внешний плеер можно выбрать выше.",14,MUTED));
          divider(); section("Загрузки"); Switch ask=new Switch(this); ask.setTextColor(TEXT); ask.setText("Спрашивать место сохранения"); ask.setChecked(prefs.getBoolean("ask_path",false)); body.addView(ask);
         ask.setOnCheckedChangeListener((b,value)->prefs.edit().putBoolean("ask_path",value).apply());
@@ -1336,7 +1344,7 @@ public final class MainActivity extends Activity {
                 page("restore","Сохранённое"); body.addView(text("Проверяем выбранную папку…",16,MUTED));
                 task(()->new JSONObject().put("restored",FolderLibrary.restore(this,tree)),restored->{
                     if(request==104) startBatch(tree);
-                    else if(request==103 && pendingDownload!=null) { pendingDownload.put("folder",tree.toString()); startDownload(FolderLibrary.create(this,tree,pendingDownload.getString("name"))); }
+                    else if(request==103 && pendingDownload!=null) { startDownload(FolderLibrary.createVideo(this,tree,pendingDownload)); }
                     else { settings(); Toast.makeText(this,"Добавлено файлов: "+restored.optInt("restored"),Toast.LENGTH_LONG).show(); }
                 });
             }

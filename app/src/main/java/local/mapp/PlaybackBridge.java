@@ -52,6 +52,7 @@ final class PlaybackBridge implements AutoCloseable {
             if(local==null) { if(!localId.isEmpty()) throw new IOException("Сохранённый файл удалён"); break; }
             if(localId.isEmpty()) { localId=local.optString("id"); cache.clear(); }
             if(local.optLong("downloaded")<=end) {
+                if(start>=LocalIndex.offset(local) && LocalIndex.ready(context,local)) return LocalIndex.read(context,local,start,(int)(end-start+1));
                 if(!DownloadService.queued.contains(localId) || System.currentTimeMillis()>=deadline) throw new IOException("Этот диапазон ещё не скачан");
                 Thread.sleep(200); continue;
             }
