@@ -49,7 +49,7 @@ public final class PlayerActivity extends Activity {
         overlay.setBackgroundColor(0x22000000);
         top=new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL); top.setBackgroundColor(0x77000000); overlay.addView(top);
         top.addView(icon(R.drawable.player_arrow_back,"Назад",this::finish));
-        TextView title=new TextView(this); title.setText("MApp"); title.setTextColor(Color.WHITE); title.setTextSize(18); top.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        top.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
         top.addView(icon(R.drawable.player_screen_rotation,"Повернуть экран",()->setRequestedOrientation(getResources().getConfiguration().orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE?android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)));
         ImageButton lock=icon(R.drawable.player_lock_open,"Блокировка управления",()->{}); top.addView(lock);
         lock.setOnClickListener(v->{ locked=!locked; bottom.setVisibility(locked?View.GONE:View.VISIBLE); lock.setImageResource(locked?R.drawable.player_lock:R.drawable.player_lock_open); Toast.makeText(this,locked?"Управление заблокировано":"Управление разблокировано",Toast.LENGTH_SHORT).show(); });
@@ -91,6 +91,7 @@ public final class PlayerActivity extends Activity {
                 if(event.type==MediaPlayer.Event.Playing) {
                     pause.setImageResource(R.drawable.player_pause); showControls();
                     if(!started) { started=true; if(resume>0) player.setTime(resume); }
+                    if(audioDialog!=null && audioDialog.isShowing()) player.pause();
                 } else if(event.type==MediaPlayer.Event.Paused) { pause.setImageResource(R.drawable.player_play_arrow); showControls(); }
                 else if(event.type==MediaPlayer.Event.Buffering) { buffering=event.getBuffering(); status.setText("Буферизация: "+(int)buffering+" %"); }
                 else if(event.type==MediaPlayer.Event.EncounteredError) new AlertDialog.Builder(this).setMessage("Не удалось прочитать видео. Проверьте соединение или выберите другую раздачу.").setPositiveButton("Закрыть",(d,n)->finish()).show();
@@ -156,8 +157,8 @@ public final class PlayerActivity extends Activity {
         int remembered=movie==null && savedUri==null?Integer.MIN_VALUE:getSharedPreferences("playback",0).getInt(audioKey,Integer.MIN_VALUE);
         for(var track:audio) if(track.id==remembered && player.getAudioTrack()!=remembered) player.setAudioTrack(remembered);
         if(!askAudio || audio.size()<2) { player.setVolume(100); return; }
-        // pause() toggles in this LibVLC binding; issue it once, not again from a queued Playing event.
-        if(player.isPlaying()) player.pause();
+        // LibVLC 3.7.7 JNI calls set_pause(1). Also enforce this on a late Playing event.
+        player.pause();
         String[] names=new String[audio.size()]; int selected=0;
         for(int i=0;i<names.length;i++) { names[i]=audio.get(i).name; if(audio.get(i).id==player.getAudioTrack()) selected=i; }
         audioDialog=new AlertDialog.Builder(this).setTitle("Выберите аудиодорожку")
