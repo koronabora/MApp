@@ -10,7 +10,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import org.json.JSONObject;
 
-/** Stable-length loopback stream: verified saved prefix first, pinned HTTPS for missing ranges. */
+/** Loopback stream. Once a download exists, reads are exclusively from its saved bytes. */
 final class PlaybackBridge implements AutoCloseable {
     private final ServerSocket server;
     private final ExecutorService workers=Executors.newCachedThreadPool();
@@ -21,31 +21,48 @@ final class PlaybackBridge implements AutoCloseable {
     private final Context context;
     private final long length;
     private volatile boolean closed;
+    private volatile String localId="";
     private final Map<Long,byte[]> cache=Collections.synchronizedMap(new LinkedHashMap<Long,byte[]>(64,.75f,true) {
         @Override protected boolean removeEldestEntry(Map.Entry<Long,byte[]> entry) { return size()>128; }
     });
     PlaybackBridge(Context context,String path,long length) throws Exception {
+        this(context,path,length,"");
+    }
+    private PlaybackBridge(Context context,String path,long length,String localId) throws Exception {
         this.context=context.getApplicationContext(); this.path=path; this.length=length;
-        api=new Api(context); identity=Vault.sessionIdentity(context);
+        this.localId=localId; api=localId.isEmpty()?new Api(context):null; identity=localId.isEmpty()?Vault.sessionIdentity(context):"";
         server=new ServerSocket(0,8,InetAddress.getByName("127.0.0.1"));
         workers.submit(()->{ while(!closed) try { Socket socket=server.accept(); sockets.add(socket); workers.submit(()->serve(socket)); }
             catch(IOException | RejectedExecutionException e) { if(closed) break; } });
     }
+    PlaybackBridge(Context context,JSONObject local) throws Exception {
+        this(context,local.getString("path"),local.getLong("size"),local.getString("id"));
+    }
     String url() { return "http://127.0.0.1:"+server.getLocalPort()+"/"+token; }
     private byte[] block(long start) throws Exception {
-        if(closed || !identity.equals(Vault.sessionIdentity(context))) throw new IOException("Playback closed");
-        byte[] found=cache.get(start); if(found!=null) return found;
+        if(closed || (!identity.isEmpty() && !identity.equals(Vault.sessionIdentity(context)))) throw new IOException("Playback closed");
         long end=Math.min(length-1,start+512*1024-1);
-        var items=Library.all(context);
-        for(int i=0;i<items.length();i++) {
-            JSONObject item=items.optJSONObject(i);
-            if(!path.equals(item.optString("path")) || !api.server.equals(item.optString("server")) || item.optLong("downloaded")<=end) continue;
-            try(var fd=context.getContentResolver().openFileDescriptor(Uri.parse(item.getString("uri")),"r"); var in=new FileInputStream(fd.getFileDescriptor())) {
+        long deadline=System.currentTimeMillis()+30000;
+        do {
+            JSONObject local=null; var items=Library.all(context);
+            for(int i=0;i<items.length();i++) {
+                JSONObject item=items.optJSONObject(i);
+                if((!localId.isEmpty() && localId.equals(item.optString("id"))) || (localId.isEmpty() && path.equals(item.optString("path")) && api.server.equals(item.optString("server")))) { local=item; break; }
+            }
+            if(local==null) { if(!localId.isEmpty()) throw new IOException("Сохранённый файл удалён"); break; }
+            if(localId.isEmpty()) { localId=local.optString("id"); cache.clear(); }
+            if(local.optLong("downloaded")<=end) {
+                if(!DownloadService.queued.contains(localId) || System.currentTimeMillis()>=deadline) throw new IOException("Этот диапазон ещё не скачан");
+                Thread.sleep(200); continue;
+            }
+            try(var fd=context.getContentResolver().openFileDescriptor(Uri.parse(local.getString("uri")),"r"); var in=new FileInputStream(fd.getFileDescriptor())) {
                 byte[] bytes=new byte[(int)(end-start+1)]; ByteBuffer buffer=ByteBuffer.wrap(bytes); in.getChannel().position(start);
                 while(buffer.hasRemaining()) if(in.getChannel().read(buffer)<0) throw new EOFException();
-                cache.put(start,bytes); Diagnostics.event("playback-read","local offset="+start+" bytes="+bytes.length); return bytes;
-            } catch(Exception e) { Diagnostics.event("playback-local",e.getClass().getSimpleName()); }
-        }
+                Diagnostics.event("playback-read","local-only offset="+start+" bytes="+bytes.length); return bytes;
+            }
+        } while(!closed);
+        if(closed) throw new InterruptedIOException();
+        byte[] found=cache.get(start); if(found!=null) return found;
         long began=System.currentTimeMillis();
         byte[] bytes=VerifiedChunk.retry(()->{ if(closed) throw new InterruptedIOException(); return VerifiedChunk.read(api,path,start,end,length); });
         cache.put(start,bytes); Diagnostics.event("playback-read","remote offset="+start+" bytes="+bytes.length+" ms="+(System.currentTimeMillis()-began)); return bytes;

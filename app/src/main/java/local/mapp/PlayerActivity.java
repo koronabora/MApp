@@ -91,7 +91,6 @@ public final class PlayerActivity extends Activity {
                 if(event.type==MediaPlayer.Event.Playing) {
                     pause.setText("Ⅱ"); showControls();
                     if(!started) { started=true; if(resume>0) player.setTime(resume); }
-                    if(audioDialog!=null && audioDialog.isShowing() && player.isPlaying()) player.pause();
                 } else if(event.type==MediaPlayer.Event.Paused) { pause.setText("▶"); showControls(); }
                 else if(event.type==MediaPlayer.Event.Buffering) { buffering=event.getBuffering(); status.setText("Буферизация: "+(int)buffering+" %"); }
                 else if(event.type==MediaPlayer.Event.EncounteredError) new AlertDialog.Builder(this).setMessage("Не удалось прочитать видео. Проверьте соединение или выберите другую раздачу.").setPositiveButton("Закрыть",(d,n)->finish()).show();
@@ -99,7 +98,10 @@ public final class PlayerActivity extends Activity {
             });
             Media media;
             Uri uri=getIntent().getData();
-            if("local.mapp.media".equals(uri.getAuthority())) {
+            if(getIntent().hasExtra("local_item")) {
+                bridge=new PlaybackBridge(this,new JSONObject(getIntent().getStringExtra("local_item")));
+                media=new Media(engine,Uri.parse(bridge.url()));
+            } else if("local.mapp.media".equals(uri.getAuthority())) {
                 JSONObject source=MediaProvider.describe(this,uri);
                 bridge=new PlaybackBridge(this,source.getString("path"),source.getLong("size"));
                 media=new Media(engine,Uri.parse(bridge.url()));
@@ -108,7 +110,9 @@ public final class PlayerActivity extends Activity {
                 if(descriptor==null) throw new java.io.IOException("Файл недоступен");
                 media=new Media(engine,descriptor.getFileDescriptor());
             }
-            media.setHWDecoderEnabled(true,false);
+            boolean software=DecoderPolicy.software(this,DecoderPolicy.name(this,uri));
+            media.setHWDecoderEnabled(!software,false);
+            Diagnostics.event("decoder",software?"VLC software":"MediaCodec auto");
             // Never scan a multi-gigabyte incomplete AVI to rebuild its index.
             media.addOption(":avi-index=2");
             player.setMedia(media); media.release(); player.play();
@@ -123,7 +127,7 @@ public final class PlayerActivity extends Activity {
     private Button control(String label,Runnable action) {
         Button button=new Button(this); button.setText(label); button.setAllCaps(false); button.setTextColor(Color.WHITE); button.setBackgroundColor(Color.TRANSPARENT); button.setOnClickListener(v->action.run()); return button;
     }
-    private Button icon(String symbol,String description,Runnable action) { Button b=control(symbol,action); b.setContentDescription(description); b.setTextSize(22); b.setMinWidth(0); b.setMinimumWidth(0); b.setPadding(0,0,0,0); b.setLayoutParams(new LinearLayout.LayoutParams(dp(48),dp(48))); return b; }
+    private Button icon(String symbol,String description,Runnable action) { Button b=control(symbol,action); b.setContentDescription(description); b.setTextSize(26); b.setMinWidth(0); b.setMinimumWidth(0); b.setPadding(0,0,0,0); int size=Math.min(dp(60),(getResources().getDisplayMetrics().widthPixels-dp(24))/6); b.setLayoutParams(new LinearLayout.LayoutParams(size,size)); return b; }
     private void showControls() { overlay.setVisibility(View.VISIBLE); ui.removeCallbacks(hideControls); ui.postDelayed(hideControls,4000); }
     private void more() {
         new AlertDialog.Builder(this).setItems(new String[]{"Скорость воспроизведения","Масштаб видео"},(d,n)->{
@@ -152,12 +156,13 @@ public final class PlayerActivity extends Activity {
         int remembered=movie==null && savedUri==null?Integer.MIN_VALUE:getSharedPreferences("playback",0).getInt(audioKey,Integer.MIN_VALUE);
         for(var track:audio) if(track.id==remembered && player.getAudioTrack()!=remembered) player.setAudioTrack(remembered);
         if(!askAudio || audio.size()<2) { player.setVolume(100); return; }
+        // pause() toggles in this LibVLC binding; issue it once, not again from a queued Playing event.
         if(player.isPlaying()) player.pause();
         String[] names=new String[audio.size()]; int selected=0;
         for(int i=0;i<names.length;i++) { names[i]=audio.get(i).name; if(audio.get(i).id==player.getAudioTrack()) selected=i; }
         audioDialog=new AlertDialog.Builder(this).setTitle("Выберите аудиодорожку")
             .setSingleChoiceItems(names,selected,(d,n)->{
-                selectAudio(audio.get(n).id); player.setTime(0); player.setVolume(100); player.play(); d.dismiss();
+                d.dismiss(); selectAudio(audio.get(n).id); player.setTime(0); player.setVolume(100); player.play();
             }).setNegativeButton("Отмена",(d,n)->finish()).setOnCancelListener(d->finish()).create();
         audioDialog.show();
     }
@@ -182,7 +187,7 @@ public final class PlayerActivity extends Activity {
         long position=completed?0:Math.max(0,player.getTime());
         long duration=Math.max(0,player.getLength());
         setResult(RESULT_OK,new Intent().putExtra("extra_position",position));
-        WatchState.save(this,movie==null?"":movie,getIntent().getStringExtra("episode")==null?"":getIntent().getStringExtra("episode"),getIntent().getStringExtra("torrent")==null?"":getIntent().getStringExtra("torrent"),getIntent().getIntExtra("file",0),position);
+        if(movie!=null && !movie.isEmpty()) WatchState.save(this,movie,getIntent().getStringExtra("episode")==null?"":getIntent().getStringExtra("episode"),getIntent().getStringExtra("torrent")==null?"":getIntent().getStringExtra("torrent"),getIntent().getIntExtra("file",0),position);
         if(savedUri!=null) Library.progress(this,savedUri,position,duration,completed);
         if(movie!=null && !movie.isEmpty() && !movie.startsWith("local-file:") && (finalUpdate || saving.compareAndSet(false,true))) io.submit(()->{ try {
             JSONObject update=new JSONObject().put("position",position).put("duration",duration).put("completed",completed);

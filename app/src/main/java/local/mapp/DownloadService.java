@@ -16,6 +16,7 @@ public final class DownloadService extends Service {
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     static final Set<String> queued=ConcurrentHashMap.newKeySet();
     static final Set<String> cancelled=ConcurrentHashMap.newKeySet();
+    static final Set<String> paused=ConcurrentHashMap.newKeySet();
     private volatile boolean stopped;
     @Override public IBinder onBind(Intent i) { return null; }
     @Override public void onCreate() {
@@ -43,23 +44,27 @@ public final class DownloadService extends Service {
         try {
             Api api=new Api(this);
             if(!api.server.equals(item.getString("server"))) throw new IOException("Подключитесь к исходному серверу");
+            if(!item.optString("release").isEmpty()) {
+                String torrent=api.request("POST","/v1/torrents",new JSONObject().put("release",item.getString("release"))).getString("id");
+                if(!item.getString("path").startsWith("/v1/torrents/"+torrent+"/files/")) throw new IOException("Источник изменился; выберите его заново");
+            }
             Uri target=Uri.parse(item.getString("uri"));
             long total=item.getLong("size"), done=item.optLong("downloaded");
-            if(cancelled.contains(item.getString("id"))) throw new InterruptedIOException("Отменено пользователем");
+            if(cancelled.contains(item.getString("id")) || paused.contains(item.getString("id"))) throw new InterruptedIOException("Загрузка остановлена");
             item.put("state","downloading"); Library.downloadState(this,item);
             Diagnostics.init(this); Diagnostics.event("download","started bytes="+item.optLong("downloaded")+" total="+item.optLong("size"));
             try(ParcelFileDescriptor fd=getContentResolver().openFileDescriptor(target,"rw");
                 FileOutputStream output=new FileOutputStream(fd.getFileDescriptor()); FileChannel channel=output.getChannel()) {
                 done=Math.min(done,channel.size()); channel.position(done); channel.truncate(done);
                 while(done<total && !stopped) {
-                    if(cancelled.contains(item.getString("id"))) throw new InterruptedIOException("Отменено пользователем");
+                    if(cancelled.contains(item.getString("id")) || paused.contains(item.getString("id"))) throw new InterruptedIOException("Загрузка остановлена");
                     long chunkStarted=System.currentTimeMillis(), chunkStart=done;
                     long end=Math.min(total-1,done+4*1024*1024-1);
                     byte[] verified=VerifiedChunk.retry(()->{
-                        if(stopped || cancelled.contains(item.getString("id"))) throw new InterruptedIOException();
+                        if(stopped || cancelled.contains(item.getString("id")) || paused.contains(item.getString("id"))) throw new InterruptedIOException();
                         return VerifiedChunk.read(api,item.getString("path"),chunkStart,end,total);
                     });
-                    if(stopped || cancelled.contains(item.getString("id"))) throw new InterruptedIOException();
+                    if(stopped || cancelled.contains(item.getString("id")) || paused.contains(item.getString("id"))) throw new InterruptedIOException();
                     {
                         ByteBuffer bytes=ByteBuffer.wrap(verified);
                         while(bytes.hasRemaining()) channel.write(bytes);
@@ -81,6 +86,7 @@ public final class DownloadService extends Service {
             Diagnostics.event("download-error",e.getClass().getSimpleName());
             try { item.put("state","paused").put("error",e.getMessage()); } catch(Exception ignored) { }
         }
+        paused.remove(item.optString("id"));
         if(cancelled.remove(item.optString("id"))) {
             try {
                 FolderLibrary.remove(this,item);
