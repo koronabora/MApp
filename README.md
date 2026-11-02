@@ -1,6 +1,8 @@
 # MApp
 
-Android-клиент сервера **MCore**, версия **0.3.6** (`versionCode=12`). Android 10+; arm64 и x86_64.
+Android-клиент сервера **MCore**, версия **0.3.7** (`versionCode=13`). Android 10+; arm64 и x86_64.
+
+Исправления распознавания серий и полных сезонов: [release-037.md](docs/release-037.md).
 
 Изменения интерфейса 0.3.6: [release-036.md](docs/release-036.md).
 
